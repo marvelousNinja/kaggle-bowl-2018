@@ -1,0 +1,8 @@
+certifi==2018.1.18
+click==6.7
+kaggle==1.0.5
+python-dateutil==2.6.1
+python-dotenv==0.7.1
+shell==1.0.1
+six==1.11.0
+urllib3==1.22
