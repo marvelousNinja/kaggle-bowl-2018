@@ -88,7 +88,7 @@ class MaskRCNN(nn.Module):
         rpn_map = self.relu(rpn_map)
 
         self.anchors = np.repeat(self.anchor_grid[np.newaxis, :], x.shape[0], axis=0)
-        self.anchors = Variable(torch.from_numpy(self.anchors), requires_grad=False)
+        self.anchors = cuda_pls(Variable(torch.from_numpy(self.anchors), requires_grad=False))
 
         box_scores = self.box_classifier(rpn_map).view(-1, self.total_anchors, 2)
         box_scores = F.softmax(box_scores, dim=2)
@@ -112,7 +112,7 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
 
         ious.append(image_ious)
 
-    total_loss = Variable(torch.FloatTensor(1))
+    total_loss = cuda_pls(Variable(torch.FloatTensor(1)))
 
     for image_ious, image_box_scores, gt, image, img_anchors in zip(ious, box_scores, gt_boxes, images, anchors):
         image_ious = np.array(image_ious)
@@ -133,7 +133,7 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
         # total_loss += F.cross_entropy(image_box_scores[[indicies]], Variable(torch.from_numpy(labels[indicies]))) / len(box_scores)
 
         # TODO AS: We can avoid indexing, if we set labels to -100
-        total_loss += F.binary_cross_entropy(image_box_scores[[indicies]][:, 1], Variable(torch.from_numpy(labels[indicies].astype(np.float32)))) / len(box_scores)
+        total_loss += F.binary_cross_entropy(image_box_scores[[indicies]][:, 1], cuda_pls(Variable(torch.from_numpy(labels[indicies].astype(np.float32))))) / len(box_scores)
 
         # values, preds = torch.max(image_box_scores, dim=1)
         # preds = preds.data.numpy()
@@ -176,14 +176,18 @@ def generate_segmentation_batch(size):
 
     return images, gt_boxes
 
+def cuda_pls(variable):
+    if torch.cuda.is_available():
+        variable.cuda()
+    return variable
 
 def fit():
-    net = MaskRCNN()
+    net = cuda_pls(MaskRCNN())
     # optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001)
     validation_images, validation_gt_boxes = generate_segmentation_batch(10)
     train_images, train_gt_boxes = generate_segmentation_batch(16)
-    validation_images = Variable(torch.from_numpy(validation_images.astype(np.float32)))
+    validation_images = cuda_pls(Variable(torch.from_numpy(validation_images.astype(np.float32))))
 
     num_epochs = 2
     batch_size = 8
@@ -196,7 +200,7 @@ def fit():
         for i in tqdm(range(num_batches)):
             batch_indicies = indicies[i * batch_size:i * batch_size + batch_size]
             image_batch, gt_boxes_batch = train_images[batch_indicies], train_gt_boxes[batch_indicies]
-            image_batch = Variable(torch.from_numpy(image_batch.astype(np.float32)))
+            image_batch = cuda_pls(Variable(torch.from_numpy(image_batch.astype(np.float32))))
 
             optimizer.zero_grad()
             box_scores, anchors = net(image_batch)
