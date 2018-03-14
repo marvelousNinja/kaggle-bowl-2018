@@ -94,36 +94,23 @@ class MaskRCNN(nn.Module):
         box_scores = F.softmax(box_scores, dim=2)
         return box_scores, self.anchors
 
-def iou(one, another):
-    x_inter = (torch.min(one[2], another[2]) - torch.max(one[0], another[0])).clamp(0)
-    y_inter = (torch.min(one[3], another[3]) - torch.max(one[1], another[1])).clamp(0)
-    inter = x_inter * y_inter
-
-    if (inter == 0).all():
-        return 0
-    else:
-        one_area = (one[2] - one[0]) * (one[3] - one[1])
-        another_area = (another[2] - another[0]) * (another[3] - another[1])
-        val = (inter / (one_area + another_area - inter)).data.numpy()[0]
-        # if val > 0:
-        #     display_image_and_boxes(image, torch.cat((one, another)).view(-1, 4).data.numpy())
-        #     print(val)
-        #     input('waiting...')
-        return val
+def iou(bboxes_a, bboxes_b):
+    tl = np.maximum(bboxes_a[:, None, :2], bboxes_b[:, :2])
+    br = np.minimum(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
+    area_i = np.prod(br - tl, axis=2) * (tl < br).all(axis=2)
+    area_a = np.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], axis=1)
+    area_b = np.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], axis=1)
+    return area_i / (area_a[:, None] + area_b - area_i)
 
 def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
     ious = []
     for img_id in range(anchors.shape[0]):
-        image_ious = []
+        image_ious = iou(
+            anchors[img_id].data.numpy(),
+            gt_boxes[img_id]
+        )
+
         ious.append(image_ious)
-
-        for anchor in anchors[img_id]:
-            anchor_ious = []
-            image_ious.append(anchor_ious)
-
-            for gt_box in gt_boxes[img_id]:
-                some_iou = iou(anchor, Variable(torch.from_numpy(gt_box.astype(np.float32))))
-                anchor_ious.append(some_iou)
 
     total_loss = Variable(torch.FloatTensor(1))
 
@@ -144,6 +131,8 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
         indicies = indicies.reshape(-1)
         indicies = np.unique(indicies)
         # total_loss += F.cross_entropy(image_box_scores[[indicies]], Variable(torch.from_numpy(labels[indicies]))) / len(box_scores)
+
+        # TODO AS: We can avoid indexing, if we set labels to -100
         total_loss += F.binary_cross_entropy(image_box_scores[[indicies]][:, 1], Variable(torch.from_numpy(labels[indicies].astype(np.float32)))) / len(box_scores)
 
         # values, preds = torch.max(image_box_scores, dim=1)
@@ -193,12 +182,12 @@ def fit():
     # optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001)
     validation_images, validation_gt_boxes = generate_segmentation_batch(10)
-    train_images, train_gt_boxes = generate_segmentation_batch(100)
+    train_images, train_gt_boxes = generate_segmentation_batch(16)
     validation_images = Variable(torch.from_numpy(validation_images.astype(np.float32)))
 
-    num_epochs = 100
+    num_epochs = 2
     batch_size = 8
-    num_batches = len(train_images) // batch_size + 1
+    num_batches = len(train_images) // batch_size
 
     for _ in tqdm(range(num_epochs)):
         indicies = np.random.choice(range(len(train_images)), len(train_images))
@@ -228,5 +217,9 @@ def fit():
         tqdm.write(f'Validation loss: {validation_loss.data[0]}')
         tqdm.write(f'Training loss: {training_loss}')
 
+def prof():
+    import profile
+    stats = profile.run('fit()')
+    import pdb; pdb.set_trace()
 if __name__ == '__main__':
     Fire()
