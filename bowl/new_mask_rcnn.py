@@ -178,7 +178,7 @@ def generate_segmentation_batch(size):
 
 def cuda_pls(variable):
     if torch.cuda.is_available():
-        variable.cuda()
+        return variable.cuda()
     return variable
 
 def fit():
