@@ -44,7 +44,7 @@ class MaskRCNN(nn.Module):
     def __init__(self):
         super(MaskRCNN, self).__init__()
 
-        self.backbone = Backbone()
+        self.backbone = cuda_pls(Backbone())
 
         for param in self.backbone.parameters():
             param.requires_grad = False
