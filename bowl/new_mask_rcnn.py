@@ -106,7 +106,7 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
     ious = []
     for img_id in range(anchors.shape[0]):
         image_ious = iou(
-            anchors[img_id].data.numpy(),
+            anchors[img_id].data.cpu().numpy(),
             gt_boxes[img_id]
         )
 
