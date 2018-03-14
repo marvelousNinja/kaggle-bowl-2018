@@ -181,16 +181,12 @@ def cuda_pls(variable):
         return variable.cuda()
     return variable
 
-def fit():
+def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     net = cuda_pls(MaskRCNN())
-    # optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001)
-    validation_images, validation_gt_boxes = generate_segmentation_batch(10)
-    train_images, train_gt_boxes = generate_segmentation_batch(16)
+    validation_images, validation_gt_boxes = generate_segmentation_batch(validation_size)
+    train_images, train_gt_boxes = generate_segmentation_batch(train_size)
     validation_images = cuda_pls(Variable(torch.from_numpy(validation_images.astype(np.float32))))
-
-    num_epochs = 2
-    batch_size = 8
     num_batches = len(train_images) // batch_size
 
     for _ in tqdm(range(num_epochs)):
