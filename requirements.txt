@@ -3,7 +3,6 @@ astroid==1.6.1
 beautifulsoup4==4.6.0
 bleach==1.5.0
 certifi==2018.1.18
-cffi==1.11.5
 chardet==3.0.4
 cliff==2.8.0
 cmd2==0.8.0
@@ -45,6 +44,7 @@ tensorflow==1.5.0
 tensorflow-tensorboard==1.5.1
 torch==0.3.1
 torchvision==0.2.0
+tqdm==4.19.7
 urllib3==1.22
 Werkzeug==0.14.1
 wrapt==1.10.11

@@ -4,8 +4,10 @@ from PIL import Image, ImageDraw
 def random_bbox_in(shape):
     x0 = np.random.randint(shape[0])
     y0 = np.random.randint(shape[1])
-    width = np.random.randint(4, int(shape[0] / 5))
-    height = np.random.randint(4, int(shape[1] / 5))
+    # width = np.random.randint(20, int(shape[0] / 5))
+    # height = np.random.randint(20, int(shape[1] / 5))
+    width = 32
+    height = 32
     x1, y1 = x0 + width, y0 + height
     return [x0, y0, x1, y1]
 
@@ -24,7 +26,7 @@ def generate_segmentation_image(shape):
     masks = []
     draw = ImageDraw.Draw(image)
 
-    max_tries = 30
+    max_tries = 35
     tries = 0
 
     while tries <= max_tries:
@@ -37,7 +39,8 @@ def generate_segmentation_image(shape):
             tries += 1
             continue
 
-        random_color = tuple(np.random.randint(10, 255, 3))
+        # random_color = tuple(np.random.randint(10, 255, 3))
+        random_color = (255, 255, 255)
         if np.random.rand() > 0.5:
             draw.ellipse(bbox, fill=random_color)
             mask_draw.ellipse(bbox, fill=255)
