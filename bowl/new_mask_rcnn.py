@@ -112,7 +112,7 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
 
         ious.append(image_ious)
 
-    total_loss = cuda_pls(Variable(torch.FloatTensor(1)))
+    total_loss = cuda_pls(Variable(torch.FloatTensor([0])))
 
     for image_ious, image_box_scores, gt, image, img_anchors in zip(ious, box_scores, gt_boxes, images, anchors):
         image_ious = np.array(image_ious)
@@ -183,7 +183,7 @@ def cuda_pls(variable):
 
 def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     net = cuda_pls(MaskRCNN())
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001)
+    optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001, momentum=0.9, nesterov=True, weight_decay=0.0005)
     validation_images, validation_gt_boxes = generate_segmentation_batch(validation_size)
     train_images, train_gt_boxes = generate_segmentation_batch(train_size)
     validation_images = cuda_pls(Variable(torch.from_numpy(validation_images.astype(np.float32))))
