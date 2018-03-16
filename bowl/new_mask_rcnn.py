@@ -190,7 +190,7 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     validation_images = cuda_pls(Variable(torch.from_numpy(validation_images.astype(np.float32))))
     num_batches = len(train_images) // batch_size
 
-    for _ in tqdm(range(num_epochs)):
+    for epoch in tqdm(range(num_epochs)):
         indicies = np.random.choice(range(len(train_images)), len(train_images))
 
         training_loss = 0.0
@@ -207,15 +207,14 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
             optimizer.step()
             training_loss += loss.data[0] / num_batches
 
-            fg_scores = box_scores[0][:, 1].data.numpy()
-            top_prediction_indicies = np.argsort(fg_scores)[::-1]
-            predicted_boxes = anchors[top_prediction_indicies[:10]]
-            display_image_and_boxes(image_batch[0].data.numpy(), predicted_boxes)
+        fg_scores = box_scores[0][:, 1].data.cpu().numpy()
+        top_prediction_indicies = np.argsort(fg_scores)[::-1]
+        predicted_boxes = anchors[top_prediction_indicies[:10]]
+        display_image_and_boxes(image_batch[0].data.cpu().numpy(), predicted_boxes)
 
         validation_scores, validation_anchors = net(validation_images)
         validation_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors, validation_images)
-        tqdm.write(f'Validation loss: {validation_loss.data[0]}')
-        tqdm.write(f'Training loss: {training_loss}')
+        tqdm.write(f'epoch: {epoch} - val: {validation_loss.data[0]:.5f} - train: {training_loss:.5f}')
 
 def prof():
     import profile
