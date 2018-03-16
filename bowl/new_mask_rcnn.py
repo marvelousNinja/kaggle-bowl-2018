@@ -120,9 +120,14 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
 
         labels[np.any(image_ious > 0.7, axis=1)] = 1
         labels[np.argmax(image_ious, axis=0)] = 1
-        total_loss += F.cross_entropy(image_box_scores, cuda_pls(Variable(torch.from_numpy(labels.astype(np.float32)))), ignore_index=-1)
 
-    return total_loss
+        negative_samples = len(np.argwhere(labels == 0))
+        positive_samples = len(np.argwhere(labels == 1))
+        ignored_samples = len(np.argwhere(labels == -1))
+        tqdm.write(f'neg: {negative_samples} - pos: {positive_samples} - ign: {ignored_samples}')
+        total_loss += F.cross_entropy(image_box_scores, cuda_pls(Variable(torch.from_numpy(labels.astype(np.int)))), ignore_index=-1)
+
+    return total_loss / box_scores.shape[0]
 
 import matplotlib
 matplotlib.use('TkAgg')
