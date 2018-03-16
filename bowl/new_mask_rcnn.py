@@ -5,7 +5,7 @@ from torch.nn import functional as F
 from torch.autograd import Variable
 from torch import nn
 from fire import Fire
-from torchvision.models import resnet18
+from torchvision.models import resnet18, vgg16
 
 from bowl.roi_pooling import roi_pooling
 from bowl.utils import generate_segmentation_image
@@ -13,19 +13,20 @@ from bowl.utils import generate_segmentation_image
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        self.cnn = resnet18(pretrained=True)
+        self.cnn = vgg16(pretrained=True)
 
     def forward(self, x):
-        x = self.cnn.conv1(x)
-        x = self.cnn.bn1(x)
-        x = self.cnn.relu(x)
-        x = self.cnn.maxpool(x)
+        # x = self.cnn.conv1(x)
+        # x = self.cnn.bn1(x)
+        # x = self.cnn.relu(x)
+        # x = self.cnn.maxpool(x)
 
-        x = self.cnn.layer1(x)
-        x = self.cnn.layer2(x)
-        x = self.cnn.layer3(x)
-        x = self.cnn.layer4(x)
-        return x
+        # x = self.cnn.layer1(x)
+        # x = self.cnn.layer2(x)
+        # x = self.cnn.layer3(x)
+        # x = self.cnn.layer4(x)
+        #return x
+        return self.cnn.features(x)
 
 def normalize(image_batch):
     image_batch = image_batch.astype(np.float32)
@@ -49,12 +50,12 @@ class MaskRCNN(nn.Module):
         # for param in self.backbone.parameters():
             # param.requires_grad = False
 
-        self.base = 32
+        self.base = 16
         self.scales = [1]
         self.ratios = [1.0]
         self.anchors_per_location = len(self.scales) * len(self.ratios)
-        self.image_height = 512
-        self.image_width = 512
+        self.image_height = 224
+        self.image_width = 224
         self.anchor_grid_shape = (self.image_height // self.base, self.image_width // self.base)
         self.anchor_grid = self.generate_anchor_grid(base=self.base, scales=self.scales, ratios=self.ratios, grid_shape=self.anchor_grid_shape)
 
@@ -116,17 +117,17 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
 
         # Part of negative samples should be discarded
         labels[np.all(image_ious < 0.3, axis=1) & (labels != 1)] = 2
-        negative_samples = np.argwhere(labels == 2)
-        len_negatives = 256 - len(np.argwhere(labels == 1))
-        allowed_negatives = np.random.choice(negative_samples, allowed_negatives)
-        labels[allowed_negatives] = 0
+        all_negatives = np.argwhere(labels == 2).reshape(-1)
+        max_negatives = 256 - len(np.argwhere(labels == 1))
+        negative_samples = np.random.choice(all_negatives, min(max_negatives, len(all_negatives)) , replace=False)
+        labels[negative_samples] = 0
         labels[labels == 2] = -1
 
         negative_samples = len(np.argwhere(labels == 0))
         positive_samples = len(np.argwhere(labels == 1))
         ignored_samples = len(np.argwhere(labels == -1))
-        tqdm.write(f'neg: {negative_samples} - pos: {positive_samples} - ign: {ignored_samples}')
-        total_loss += F.cross_entropy(image_box_scores, cuda_pls(Variable(torch.from_numpy(labels.astype(np.int)))), ignore_index=-1)
+        #tqdm.write(f'neg: {negative_samples} - pos: {positive_samples} - ign: {ignored_samples}')
+        total_loss += F.binary_cross_entropy(image_box_scores[[np.argwhere(labels != -1).reshape(-1)]][:, 1], cuda_pls(Variable(torch.from_numpy(labels[np.argwhere(labels != -1).reshape(-1)].astype(np.float32)))))
 
     return total_loss / box_scores.shape[0]
 
@@ -152,7 +153,7 @@ def generate_segmentation_batch(size):
     gt_boxes = []
 
     for _ in range(size):
-        image, bboxes, _ = generate_segmentation_image((512, 512))
+        image, bboxes, _ = generate_segmentation_image((224, 224))
         image = np.swapaxes(image, 0, 2)
         images.append(image)
         gt_boxes.append(bboxes)
