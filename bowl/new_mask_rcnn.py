@@ -111,15 +111,16 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
     for image_ious, image_box_scores, gt, image, img_anchors in zip(ious, box_scores, gt_boxes, images, anchors):
         image_ious = np.array(image_ious)
         labels = np.full(image_ious.shape[0], -1)
-
-        # Part of negative samples should be discarded
-        labels[np.all(image_ious < 0.3, axis=1)] = 2
-        negative_samples = np.argwhere(labels == 2)
-        labels[np.random.choice(len(negative_samples), 225)] = 0
-        labels[labels == 2] = -1
-
         labels[np.any(image_ious > 0.7, axis=1)] = 1
         labels[np.argmax(image_ious, axis=0)] = 1
+
+        # Part of negative samples should be discarded
+        labels[np.all(image_ious < 0.3, axis=1) & (labels != 1)] = 2
+        negative_samples = np.argwhere(labels == 2)
+        len_negatives = 256 - len(np.argwhere(labels == 1))
+        allowed_negatives = np.random.choice(negative_samples, allowed_negatives)
+        labels[allowed_negatives] = 0
+        labels[labels == 2] = -1
 
         negative_samples = len(np.argwhere(labels == 0))
         positive_samples = len(np.argwhere(labels == 1))
