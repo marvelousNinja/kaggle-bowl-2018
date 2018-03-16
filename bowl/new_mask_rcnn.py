@@ -51,11 +51,11 @@ class MaskRCNN(nn.Module):
             param.requires_grad = False
 
         self.base = 16
-        self.scales = [2]
-        self.ratios = [1.0]
+        self.scales = [1, 2]
+        self.ratios = [0.5, 1.0, 2.0]
         self.anchors_per_location = len(self.scales) * len(self.ratios)
-        self.image_height = 224
-        self.image_width = 224
+        self.image_height = 512
+        self.image_width = 512
         self.anchor_grid_shape = (self.image_height // self.base, self.image_width // self.base)
         self.anchor_grid = self.generate_anchor_grid(base=self.base, scales=self.scales, ratios=self.ratios, grid_shape=self.anchor_grid_shape)
 
@@ -153,7 +153,7 @@ def generate_segmentation_batch(size):
     gt_boxes = []
 
     for _ in range(size):
-        image, bboxes, _ = generate_segmentation_image((224, 224))
+        image, bboxes, _ = generate_segmentation_image((512, 512))
         image = np.swapaxes(image, 0, 2)
         images.append(image)
         gt_boxes.append(bboxes)
