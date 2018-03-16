@@ -57,7 +57,6 @@ class MaskRCNN(nn.Module):
         self.image_width = 512
         self.anchor_grid_shape = (self.image_height // self.base, self.image_width // self.base)
         self.anchor_grid = self.generate_anchor_grid(base=self.base, scales=self.scales, ratios=self.ratios, grid_shape=self.anchor_grid_shape)
-        self.total_anchors = self.anchor_grid_shape[0] * self.anchor_grid_shape[1] * self.anchors_per_location
 
         self.rpn_conv = nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1, bias=False)
         self.box_classifier = nn.Conv2d(512, 2 * self.anchors_per_location, kernel_size=1, stride=1, padding=0, bias=False)
@@ -65,34 +64,38 @@ class MaskRCNN(nn.Module):
 
     def generate_anchor_grid(self, base, scales, ratios, grid_shape):
         anchors = []
+
+        anchors = np.zeros((grid_shape[0], grid_shape[1], len(scales) * len(ratios), 4), dtype=np.float32)
         x_ctr = int(base / 2)
         y_ctr = int(base / 2)
 
-        for scale in scales:
-            for ratio in ratios:
-                for x_diff in range(grid_shape[0]):
-                    for y_diff in range(grid_shape[0]):
+        for y_diff in range(grid_shape[0]):
+            for x_diff in range(grid_shape[0]):
+                for scale in scales:
+                    anchor_index = 0
+                    for ratio in ratios:
                         width = int(base / ratio * scale)
                         height = int(base * ratio * scale)
                         x_ctr = int(base / 2) + x_diff * base
                         y_ctr = int(base / 2) + y_diff * base
                         x1, y1 = x_ctr - width / 2, y_ctr - height / 2
                         x2, y2 = x_ctr + width / 2, y_ctr + height / 2
-                        anchors.append([x1, y1, x2, y2])
 
-        return np.array(anchors, dtype=np.float32)
+                        anchors[y_diff, x_diff, anchor_index] = [x1, y1, x2, y2]
+                        anchor_index += 1
+
+        return anchors
 
     def forward(self, x):
         cnn_map = self.backbone(x)
         rpn_map = self.rpn_conv(cnn_map)
         rpn_map = self.relu(rpn_map)
 
-        self.anchors = np.repeat(self.anchor_grid[np.newaxis, :], x.shape[0], axis=0)
-        self.anchors = cuda_pls(Variable(torch.from_numpy(self.anchors), requires_grad=False))
-
-        box_scores = self.box_classifier(rpn_map).view(-1, self.total_anchors, 2)
-        box_scores = F.softmax(box_scores, dim=2)
-        return box_scores, self.anchors
+        box_scores = self.box_classifier(rpn_map)
+        box_scores = box_scores.permute(0, 2, 3, 1).contiguous()
+        box_scores = box_scores.view(box_scores.shape[0], box_scores.shape[1], box_scores.shape[2], self.anchors_per_location, 2)
+        box_scores = F.softmax(box_scores, dim=4)
+        return box_scores.view(box_scores.shape[0], -1, 2), self.anchor_grid.reshape(-1, 4)
 
 def iou(bboxes_a, bboxes_b):
     tl = np.maximum(bboxes_a[:, None, :2], bboxes_b[:, :2])
@@ -104,13 +107,8 @@ def iou(bboxes_a, bboxes_b):
 
 def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
     ious = []
-    for img_id in range(anchors.shape[0]):
-        image_ious = iou(
-            anchors[img_id].data.cpu().numpy(),
-            gt_boxes[img_id]
-        )
-
-        ious.append(image_ious)
+    for img_id in range(gt_boxes.shape[0]):
+        ious.append(iou(anchors, gt_boxes[img_id]))
 
     total_loss = cuda_pls(Variable(torch.FloatTensor([0])))
 
