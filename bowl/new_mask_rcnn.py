@@ -184,7 +184,16 @@ def cuda_pls(variable):
 
 def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     net = cuda_pls(MaskRCNN())
-    optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001, momentum=0.9, nesterov=True, weight_decay=0.0005)
+    optimizer = torch.optim.SGD(
+        # filter(lambda p: p.requires_grad, net.parameters()),
+        [
+            { 'params': net.backbone.parameters() },
+            { 'params': net.rpn_conv.parameters(), 'lr': 0.01 },
+            { 'params': net.box_classifier.parameters(), 'lr': 0.01 }
+
+        ],
+        lr=0.001, momentum=0.9, nesterov=True, weight_decay=0.0005
+    )
     validation_images, validation_gt_boxes = generate_segmentation_batch(validation_size)
     train_images, train_gt_boxes = generate_segmentation_batch(train_size)
     validation_images = cuda_pls(Variable(torch.from_numpy(validation_images.astype(np.float32))))
@@ -208,12 +217,12 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
             training_loss += loss.data[0] / num_batches
 
         validation_scores, validation_anchors = net(validation_images)
-        fg_scores = validation_scores[0][:, 1].data.cpu().numpy()
-        top_prediction_indicies = np.argsort(fg_scores)[::-1]
-        predicted_boxes = anchors[top_prediction_indicies[:30]]
-        img = validation_images[0].data.cpu().numpy()
-        img = (img - img.min()) / (img.max() - img.min())
-        display_image_and_boxes(img, predicted_boxes)
+        # fg_scores = validation_scores[0][:, 1].data.cpu().numpy()
+        # top_prediction_indicies = np.argsort(fg_scores)[::-1]
+        # predicted_boxes = anchors[top_prediction_indicies[:30]]
+        # img = validation_images[0].data.cpu().numpy()
+        # img = (img - img.min()) / (img.max() - img.min())
+        # display_image_and_boxes(img, predicted_boxes)
 
         validation_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors, validation_images)
         tqdm.write(f'epoch: {epoch} - val: {validation_loss.data[0]:.5f} - train: {training_loss:.5f}')
