@@ -14,6 +14,7 @@ class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
         self.cnn = vgg16(pretrained=True)
+        self.cnn.features = nn.Sequential(*list(self.cnn.features.children())[:-1])
 
     def forward(self, x):
         # x = self.cnn.conv1(x)
