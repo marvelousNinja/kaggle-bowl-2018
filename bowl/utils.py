@@ -57,5 +57,8 @@ def generate_segmentation_image(shape):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
-    plt.imshow(generate_segmentation_image((224, 224))[0])
-    plt.show()
+    # plt.imshow(generate_segmentation_image((512, 512))[0])
+    # plt.show()
+    images = np.array([generate_segmentation_image((512, 512))[0] for i in range(100)])
+    print(f'Mean: {(images / 255).mean(axis=(1, 2)).mean(axis=0)}')
+    print(f'Std: {(images / 255).std(axis=(1, 2)).mean(axis=0)}')

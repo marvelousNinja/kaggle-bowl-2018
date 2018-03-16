@@ -30,8 +30,8 @@ class Backbone(nn.Module):
 def normalize(image_batch):
     image_batch = image_batch.astype(np.float32)
     image_batch /= 255
-    mean = [0.08328683, 0.08328683, 0.08328683]
-    std = [0.29126842, 0.29126842, 0.29126842]
+    mean = [0.08734627, 0.08734627, 0.08734627]
+    std = [0.28179365, 0.28179365, 0.28179365]
     image_batch[:, 0, :, :] -= mean[0]
     image_batch[:, 1, :, :] -= mean[1]
     image_batch[:, 2, :, :] -= mean[2]
@@ -46,8 +46,8 @@ class MaskRCNN(nn.Module):
 
         self.backbone = cuda_pls(Backbone())
 
-        for param in self.backbone.parameters():
-            param.requires_grad = False
+        # for param in self.backbone.parameters():
+            # param.requires_grad = False
 
         self.base = 32
         self.scales = [1]
@@ -124,7 +124,8 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
         # print(len(positive_examples), len(negative_examples))
         # import pdb; pdb.set_trace()
         # display_image_and_boxes(image.data.numpy(), img_anchors.data.numpy()[positive_examples.reshape(-1)])
-        negative_examples = negative_examples[np.random.choice(len(negative_examples), 100)]
+
+        negative_examples = negative_examples[np.random.choice(len(negative_examples), 225)]
         indicies = np.concatenate([negative_examples, positive_examples])
         indicies = indicies.reshape(-1)
         indicies = np.unique(indicies)
@@ -143,6 +144,8 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
 
     return total_loss
 
+import matplotlib
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
@@ -204,11 +207,10 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
             optimizer.step()
             training_loss += loss.data[0] / num_batches
 
-            # num_preds = (box_scores[0][:, 1] > 0.5).detach().nonzero().squeeze().numel()
-            # if num_preds > 0:
-            #     predicted_boxes = anchors[0][(box_scores[0][:, 1] > 0.5).detach().nonzero().squeeze()].data.numpy()
-            #     display_image_and_boxes(image, predicted_boxes)
-            #     # display_image_and_boxes(image, bboxes)
+            fg_scores = box_scores[0][:, 1].data.numpy()
+            top_prediction_indicies = np.argsort(fg_scores)[::-1]
+            predicted_boxes = anchors[top_prediction_indicies[:10]]
+            display_image_and_boxes(image_batch[0].data.numpy(), predicted_boxes)
 
         validation_scores, validation_anchors = net(validation_images)
         validation_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors, validation_images)
