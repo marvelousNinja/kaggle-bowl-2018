@@ -64,11 +64,7 @@ class MaskRCNN(nn.Module):
 
     def generate_anchor_grid(self, base, scales, ratios, grid_shape):
         anchors = []
-
         anchors = np.zeros((grid_shape[0], grid_shape[1], len(scales) * len(ratios), 4), dtype=np.float32)
-        x_ctr = int(base / 2)
-        y_ctr = int(base / 2)
-
         for y_diff in range(grid_shape[0]):
             for x_diff in range(grid_shape[0]):
                 for scale in scales:
@@ -115,32 +111,16 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
     for image_ious, image_box_scores, gt, image, img_anchors in zip(ious, box_scores, gt_boxes, images, anchors):
         image_ious = np.array(image_ious)
         labels = np.full(image_ious.shape[0], -1)
-        labels[np.any(image_ious < 0.3, axis=1)] = 0
+
+        # Part of negative samples should be discarded
+        labels[np.all(image_ious < 0.3, axis=1)] = 2
+        negative_samples = np.argwhere(labels == 2)
+        labels[np.random.choice(len(negative_samples), 225)] = 0
+        labels[labels == 2] = -1
+
         labels[np.any(image_ious > 0.7, axis=1)] = 1
         labels[np.argmax(image_ious, axis=0)] = 1
-        negative_examples = np.argwhere(labels == 0)
-        positive_examples = np.argwhere(labels == 1)
-
-        # print(len(positive_examples), len(negative_examples))
-        # import pdb; pdb.set_trace()
-        # display_image_and_boxes(image.data.numpy(), img_anchors.data.numpy()[positive_examples.reshape(-1)])
-
-        negative_examples = negative_examples[np.random.choice(len(negative_examples), 225)]
-        indicies = np.concatenate([negative_examples, positive_examples])
-        indicies = indicies.reshape(-1)
-        indicies = np.unique(indicies)
-        # total_loss += F.cross_entropy(image_box_scores[[indicies]], Variable(torch.from_numpy(labels[indicies]))) / len(box_scores)
-
-        # TODO AS: We can avoid indexing, if we set labels to -100
-        total_loss += F.binary_cross_entropy(image_box_scores[[indicies]][:, 1], cuda_pls(Variable(torch.from_numpy(labels[indicies].astype(np.float32))))) / len(box_scores)
-
-        # values, preds = torch.max(image_box_scores, dim=1)
-        # preds = preds.data.numpy()
-        # errored_indicies = np.argwhere(labels != preds).reshape(-1)
-        # display_image_and_boxes(image.data.numpy(), anchors[0][[errored_indicies]].data.numpy())
-
-        # if total_loss.data[0] < 0.33:
-        #     import pdb; pdb.set_trace()
+        total_loss += F.cross_entropy(image_box_scores, cuda_pls(Variable(torch.from_numpy(labels.astype(np.float32)))), ignore_index=-1)
 
     return total_loss
 
