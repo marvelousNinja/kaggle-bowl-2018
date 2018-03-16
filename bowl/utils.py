@@ -38,7 +38,6 @@ def generate_segmentation_image(shape):
             continue
 
         random_color = tuple(np.random.randint(10, 255, 3))
-        #random_color = (255, 255, 255)
         if np.random.rand() > 0.5:
             draw.ellipse(bbox, fill=random_color)
             mask_draw.ellipse(bbox, fill=255)

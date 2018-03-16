@@ -14,7 +14,6 @@ class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
         self.cnn = resnet18(pretrained=True)
-        # self.cnn.features = nn.Sequential(*list(self.cnn.features.children())[:-1])
 
     def forward(self, x):
         x = self.cnn.conv1(x)
@@ -25,6 +24,7 @@ class Backbone(nn.Module):
         x = self.cnn.layer1(x)
         x = self.cnn.layer2(x)
         x = self.cnn.layer3(x)
+        # TODO AS: Seems to work better without it
         # x = self.cnn.layer4(x)
         return x
 
@@ -47,12 +47,13 @@ class MaskRCNN(nn.Module):
 
         self.backbone = cuda_pls(Backbone())
 
+        # TODO AS: Extract as a param
         for param in self.backbone.parameters():
             param.requires_grad = False
 
         self.base = 16
-        self.scales = [1, 2]
-        self.ratios = [0.5, 1.0, 2.0]
+        self.scales = [1, 2, 4]
+        self.ratios = [1.0]
         self.anchors_per_location = len(self.scales) * len(self.ratios)
         self.image_height = 512
         self.image_width = 512
@@ -89,6 +90,9 @@ class MaskRCNN(nn.Module):
         rpn_map = self.relu(rpn_map)
 
         box_scores = self.box_classifier(rpn_map)
+        # Since scores were received from 1x1 conv, order is important here
+        # Order of anchors and scores should be exactly the same
+        # Otherwise, network will never converge
         box_scores = box_scores.permute(0, 3, 2, 1).contiguous()
         box_scores = box_scores.view(box_scores.shape[0], box_scores.shape[1], box_scores.shape[2], self.anchors_per_location, 2)
         box_scores = F.softmax(box_scores, dim=4)
@@ -118,7 +122,10 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
         # Part of negative samples should be discarded
         labels[np.all(image_ious < 0.3, axis=1) & (labels != 1)] = 2
         all_negatives = np.argwhere(labels == 2).reshape(-1)
-        max_negatives = 50 - len(np.argwhere(labels == 1))
+        # Critical hyparameter
+        # Too few negatives will slow down convergence
+        # Too many negatives will dominate loss function
+        max_negatives = 256 - len(np.argwhere(labels == 1))
         negative_samples = np.random.choice(all_negatives, min(max_negatives, len(all_negatives)) , replace=False)
         labels[negative_samples] = 0
         labels[labels == 2] = -1
@@ -171,10 +178,12 @@ def cuda_pls(variable):
 
 def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     net = cuda_pls(MaskRCNN())
-    optimizer = torch.optim.Adam([
-        { 'params': net.rpn_conv.parameters(), 'lr': 0.01 },
-        { 'params': net.box_classifier.parameters(), 'lr': 0.01 }
-    ], lr=0.001)
+    optimizer = torch.optim.SGD([
+        # TODO AS: Extract as a param
+        # { 'params': net.backbone.parameters() },
+        { 'params': net.rpn_conv.parameters(), 'lr': 0.002 },
+        { 'params': net.box_classifier.parameters(), 'lr': 0.002 }
+    ], lr=0.001, momentum=0.9, nesterov=True, weight_decay=0.0005)
 
     validation_images, validation_gt_boxes = generate_segmentation_batch(validation_size)
     train_images, train_gt_boxes = generate_segmentation_batch(train_size)
