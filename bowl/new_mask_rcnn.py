@@ -207,12 +207,14 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
             optimizer.step()
             training_loss += loss.data[0] / num_batches
 
-        fg_scores = box_scores[0][:, 1].data.cpu().numpy()
-        top_prediction_indicies = np.argsort(fg_scores)[::-1]
-        predicted_boxes = anchors[top_prediction_indicies[:10]]
-        display_image_and_boxes(image_batch[0].data.cpu().numpy(), predicted_boxes)
-
         validation_scores, validation_anchors = net(validation_images)
+        fg_scores = validation_scores[0][:, 1].data.cpu().numpy()
+        top_prediction_indicies = np.argsort(fg_scores)[::-1]
+        predicted_boxes = anchors[top_prediction_indicies[:30]]
+        img = validation_images[0].data.cpu().numpy()
+        img = (img - img.min()) / (img.max() - img.min())
+        display_image_and_boxes(img, predicted_boxes)
+
         validation_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors, validation_images)
         tqdm.write(f'epoch: {epoch} - val: {validation_loss.data[0]:.5f} - train: {training_loss:.5f}')
 
