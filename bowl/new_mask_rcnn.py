@@ -13,21 +13,20 @@ from bowl.utils import generate_segmentation_image
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        self.cnn = vgg16(pretrained=True)
-        self.cnn.features = nn.Sequential(*list(self.cnn.features.children())[:-1])
+        self.cnn = resnet18(pretrained=True)
+        # self.cnn.features = nn.Sequential(*list(self.cnn.features.children())[:-1])
 
     def forward(self, x):
-        # x = self.cnn.conv1(x)
-        # x = self.cnn.bn1(x)
-        # x = self.cnn.relu(x)
-        # x = self.cnn.maxpool(x)
+        x = self.cnn.conv1(x)
+        x = self.cnn.bn1(x)
+        x = self.cnn.relu(x)
+        x = self.cnn.maxpool(x)
 
-        # x = self.cnn.layer1(x)
-        # x = self.cnn.layer2(x)
-        # x = self.cnn.layer3(x)
+        x = self.cnn.layer1(x)
+        x = self.cnn.layer2(x)
+        x = self.cnn.layer3(x)
         # x = self.cnn.layer4(x)
-        #return x
-        return self.cnn.features(x)
+        return x
 
 def normalize(image_batch):
     image_batch = image_batch.astype(np.float32)
@@ -48,11 +47,11 @@ class MaskRCNN(nn.Module):
 
         self.backbone = cuda_pls(Backbone())
 
-        # for param in self.backbone.parameters():
-            # param.requires_grad = False
+        for param in self.backbone.parameters():
+            param.requires_grad = False
 
         self.base = 16
-        self.scales = [1]
+        self.scales = [2]
         self.ratios = [1.0]
         self.anchors_per_location = len(self.scales) * len(self.ratios)
         self.image_height = 224
@@ -60,7 +59,7 @@ class MaskRCNN(nn.Module):
         self.anchor_grid_shape = (self.image_height // self.base, self.image_width // self.base)
         self.anchor_grid = self.generate_anchor_grid(base=self.base, scales=self.scales, ratios=self.ratios, grid_shape=self.anchor_grid_shape)
 
-        self.rpn_conv = nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1, bias=False)
+        self.rpn_conv = nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1, bias=False)
         self.box_classifier = nn.Conv2d(512, 2 * self.anchors_per_location, kernel_size=1, stride=1, padding=0, bias=False)
         self.relu = nn.ReLU(inplace=True)
 
@@ -82,7 +81,7 @@ class MaskRCNN(nn.Module):
                         anchors[y_diff, x_diff, anchor_index] = [x1, y1, x2, y2]
                         anchor_index += 1
 
-        return anchors
+        return np.clip(anchors - 1, a_min=0, a_max=None)
 
     def forward(self, x):
         cnn_map = self.backbone(x)
@@ -90,7 +89,7 @@ class MaskRCNN(nn.Module):
         rpn_map = self.relu(rpn_map)
 
         box_scores = self.box_classifier(rpn_map)
-        box_scores = box_scores.permute(0, 2, 3, 1).contiguous()
+        box_scores = box_scores.permute(0, 3, 2, 1).contiguous()
         box_scores = box_scores.view(box_scores.shape[0], box_scores.shape[1], box_scores.shape[2], self.anchors_per_location, 2)
         box_scores = F.softmax(box_scores, dim=4)
         return box_scores.view(box_scores.shape[0], -1, 2), self.anchor_grid.reshape(-1, 4)
@@ -119,7 +118,7 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
         # Part of negative samples should be discarded
         labels[np.all(image_ious < 0.3, axis=1) & (labels != 1)] = 2
         all_negatives = np.argwhere(labels == 2).reshape(-1)
-        max_negatives = 256 - len(np.argwhere(labels == 1))
+        max_negatives = 50 - len(np.argwhere(labels == 1))
         negative_samples = np.random.choice(all_negatives, min(max_negatives, len(all_negatives)) , replace=False)
         labels[negative_samples] = 0
         labels[labels == 2] = -1
@@ -172,16 +171,11 @@ def cuda_pls(variable):
 
 def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     net = cuda_pls(MaskRCNN())
-    optimizer = torch.optim.SGD(
-        # filter(lambda p: p.requires_grad, net.parameters()),
-        [
-            { 'params': net.backbone.parameters() },
-            { 'params': net.rpn_conv.parameters(), 'lr': 0.01 },
-            { 'params': net.box_classifier.parameters(), 'lr': 0.01 }
+    optimizer = torch.optim.Adam([
+        { 'params': net.rpn_conv.parameters(), 'lr': 0.01 },
+        { 'params': net.box_classifier.parameters(), 'lr': 0.01 }
+    ], lr=0.001)
 
-        ],
-        lr=0.001, momentum=0.9, nesterov=True, weight_decay=0.0005
-    )
     validation_images, validation_gt_boxes = generate_segmentation_batch(validation_size)
     train_images, train_gt_boxes = generate_segmentation_batch(train_size)
     validation_images = cuda_pls(Variable(torch.from_numpy(validation_images.astype(np.float32))))
@@ -207,7 +201,7 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
         validation_scores, validation_anchors = net(validation_images)
         # fg_scores = validation_scores[0][:, 1].data.cpu().numpy()
         # top_prediction_indicies = np.argsort(fg_scores)[::-1]
-        # predicted_boxes = anchors[top_prediction_indicies[:30]]
+        # predicted_boxes = anchors[top_prediction_indicies[:10]]
         # img = validation_images[0].data.cpu().numpy()
         # img = (img - img.min()) / (img.max() - img.min())
         # display_image_and_boxes(img, predicted_boxes)
