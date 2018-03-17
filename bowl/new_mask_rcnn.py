@@ -52,16 +52,17 @@ class MaskRCNN(nn.Module):
             param.requires_grad = False
 
         self.base = 16
-        self.scales = [1, 2, 4]
+        self.scales = [1] #, 2, 4]
         self.ratios = [1.0]
         self.anchors_per_location = len(self.scales) * len(self.ratios)
-        self.image_height = 512
-        self.image_width = 512
+        self.image_height = 224
+        self.image_width = 224
         self.anchor_grid_shape = (self.image_height // self.base, self.image_width // self.base)
         self.anchor_grid = self.generate_anchor_grid(base=self.base, scales=self.scales, ratios=self.ratios, grid_shape=self.anchor_grid_shape)
 
         self.rpn_conv = nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1, bias=False)
         self.box_classifier = nn.Conv2d(512, 2 * self.anchors_per_location, kernel_size=1, stride=1, padding=0, bias=False)
+        self.box_regressor = nn.Conv2d(512, 4 * self.anchors_per_location, kernel_size=1, stride=1, padding=0, bias=False)
         self.relu = nn.ReLU(inplace=True)
 
     def generate_anchor_grid(self, base, scales, ratios, grid_shape):
@@ -90,13 +91,15 @@ class MaskRCNN(nn.Module):
         rpn_map = self.relu(rpn_map)
 
         box_scores = self.box_classifier(rpn_map)
+        box_deltas = self.box_regressor(rpn_map)
         # Since scores were received from 1x1 conv, order is important here
         # Order of anchors and scores should be exactly the same
         # Otherwise, network will never converge
         box_scores = box_scores.permute(0, 3, 2, 1).contiguous()
         box_scores = box_scores.view(box_scores.shape[0], box_scores.shape[1], box_scores.shape[2], self.anchors_per_location, 2)
-        box_scores = F.softmax(box_scores, dim=4)
-        return box_scores.view(box_scores.shape[0], -1, 2), self.anchor_grid.reshape(-1, 4)
+        box_deltas = box_deltas.permute(0, 3, 2, 1).contiguous()
+        box_deltas = box_deltas.view(box_deltas.shape[0], box_deltas.shape[1], box_deltas.shape[2], self.anchors_per_location, 4)
+        return box_scores.view(box_scores.shape[0], -1, 2), box_deltas.view(box_deltas.shape[0], -1, 4), self.anchor_grid.reshape(-1, 4)
 
 def iou(bboxes_a, bboxes_b):
     tl = np.maximum(bboxes_a[:, None, :2], bboxes_b[:, :2])
@@ -106,37 +109,76 @@ def iou(bboxes_a, bboxes_b):
     area_b = np.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], axis=1)
     return area_i / (area_a[:, None] + area_b - area_i)
 
-def rpn_classifier_loss(gt_boxes, box_scores, anchors, images):
-    ious = []
-    for img_id in range(gt_boxes.shape[0]):
-        ious.append(iou(anchors, gt_boxes[img_id]))
+def as_labels_and_gt_indicies(anchors, gt_boxes):
+    ious = iou(anchors, gt_boxes)
+    labels = np.full(ious.shape[0], -1)
+    labels[np.any(ious > 0.7, axis=1)] = 1
+    labels[np.argmax(ious, axis=0)] = 1
+    # Part of negative samples should be discarded
+    labels[np.all(ious < 0.3, axis=1) & (labels != 1)] = 2
+    all_negatives = np.argwhere(labels == 2).reshape(-1)
+    # Critical hyparameter
+    # Too few negatives will slow down convergence
+    # Too many negatives will dominate loss function
+    max_negatives = 50 - len(np.argwhere(labels == 1))
+    negative_samples = np.random.choice(all_negatives, min(max_negatives, len(all_negatives)) , replace=False)
+    labels[negative_samples] = 0
+    labels[labels == 2] = -1
+    gt_indicies = np.argmax(ious, axis=1)
+    return labels, gt_indicies
 
+def rpn_classifier_loss(gt_boxes, box_scores, anchors):
     total_loss = cuda_pls(Variable(torch.FloatTensor([0])))
-
-    for image_ious, image_box_scores, gt, image, img_anchors in zip(ious, box_scores, gt_boxes, images, anchors):
-        image_ious = np.array(image_ious)
-        labels = np.full(image_ious.shape[0], -1)
-        labels[np.any(image_ious > 0.7, axis=1)] = 1
-        labels[np.argmax(image_ious, axis=0)] = 1
-
-        # Part of negative samples should be discarded
-        labels[np.all(image_ious < 0.3, axis=1) & (labels != 1)] = 2
-        all_negatives = np.argwhere(labels == 2).reshape(-1)
-        # Critical hyparameter
-        # Too few negatives will slow down convergence
-        # Too many negatives will dominate loss function
-        max_negatives = 256 - len(np.argwhere(labels == 1))
-        negative_samples = np.random.choice(all_negatives, min(max_negatives, len(all_negatives)) , replace=False)
-        labels[negative_samples] = 0
-        labels[labels == 2] = -1
-
-        negative_samples = len(np.argwhere(labels == 0))
-        positive_samples = len(np.argwhere(labels == 1))
-        ignored_samples = len(np.argwhere(labels == -1))
-        #tqdm.write(f'neg: {negative_samples} - pos: {positive_samples} - ign: {ignored_samples}')
-        total_loss += F.binary_cross_entropy(image_box_scores[[np.argwhere(labels != -1).reshape(-1)]][:, 1], cuda_pls(Variable(torch.from_numpy(labels[np.argwhere(labels != -1).reshape(-1)].astype(np.float32)))))
-
+    for image_box_scores, image_gt_boxes in zip(box_scores, gt_boxes):
+        labels, _ = as_labels_and_gt_indicies(anchors, image_gt_boxes)
+        total_loss += F.cross_entropy(image_box_scores, cuda_pls(Variable(torch.from_numpy(labels.astype(np.int)))), ignore_index=-1)
     return total_loss / box_scores.shape[0]
+
+def construct_deltas(gt_boxes, anchors):
+    gt_boxes = gt_boxes.astype(np.float32)
+
+    # TODO AS: I've reformulated it here to shifts from top-left. Double check that
+    w_gt = gt_boxes[:, 2] - gt_boxes[:, 0]
+    h_gt = gt_boxes[:, 3] - gt_boxes[:, 1]
+    # x_centers_gt = gt_boxes[:, 0] + w_gt / 2
+    # y_centers_gt = gt_boxes[:, 1] + h_gt / 2
+
+    w_a = anchors[:, 2] - anchors[:, 0]
+    h_a = anchors[:, 3] - anchors[:, 1]
+    # x_centers_a = anchors[:, 0] + w_a / 2
+    # y_centers_a = anchors[:, 1] + h_gt / 2
+
+    t_x = (gt_boxes[:, 0] - anchors[:, 0]) / w_a
+    t_y = (gt_boxes[:, 1] - anchors[:, 1]) / h_a
+    t_w = np.log(w_gt / w_a)
+    t_h = np.log(h_gt / h_a)
+    return np.column_stack((t_x, t_y, t_w, t_h))
+
+def construct_boxes(deltas, anchors):
+    w_a = anchors[:, 2] - anchors[:, 0]
+    h_a = anchors[:, 3] - anchors[:, 1]
+    x_a = anchors[:, 0]
+    y_a = anchors[:, 1]
+
+    return np.column_stack((
+        deltas[:, 0] * w_a + x_a,
+        deltas[:, 1] * h_a + y_a,
+        deltas[:, 0] * w_a + x_a + np.exp(deltas[:, 2]) * w_a,
+        deltas[:, 1] * h_a + y_a + np.exp(deltas[:, 3]) * h_a
+    ))
+
+def rpn_regressor_loss(gt_boxes, box_deltas, anchors):
+    total_loss = cuda_pls(Variable(torch.FloatTensor([0])))
+    for image_box_deltas, image_gt_boxes in zip(box_deltas, gt_boxes):
+        labels, indicies = as_labels_and_gt_indicies(anchors, image_gt_boxes)
+        positive_samples = np.argwhere(labels == 1).reshape(-1)
+        positive_indicies = indicies[positive_samples]
+        positive_deltas = image_box_deltas[[positive_samples]]
+        positive_gt_boxes = image_gt_boxes[positive_indicies]
+        positive_anchors = anchors[positive_samples]
+        true_deltas = construct_deltas(positive_gt_boxes, positive_anchors)
+        total_loss += F.smooth_l1_loss(positive_deltas, cuda_pls(Variable(torch.from_numpy(true_deltas))))
+    return total_loss / box_deltas.shape[0]
 
 import matplotlib
 matplotlib.use('TkAgg')
@@ -160,7 +202,7 @@ def generate_segmentation_batch(size):
     gt_boxes = []
 
     for _ in range(size):
-        image, bboxes, _ = generate_segmentation_image((512, 512))
+        image, bboxes, _ = generate_segmentation_image((224, 224))
         image = np.swapaxes(image, 0, 2)
         images.append(image)
         gt_boxes.append(bboxes)
@@ -178,12 +220,13 @@ def cuda_pls(variable):
 
 def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     net = cuda_pls(MaskRCNN())
-    optimizer = torch.optim.SGD([
+    optimizer = torch.optim.Adam([
         # TODO AS: Extract as a param
         # { 'params': net.backbone.parameters() },
         { 'params': net.rpn_conv.parameters(), 'lr': 0.002 },
-        { 'params': net.box_classifier.parameters(), 'lr': 0.002 }
-    ], lr=0.001, momentum=0.9, nesterov=True, weight_decay=0.0005)
+        { 'params': net.box_classifier.parameters(), 'lr': 0.002 },
+        { 'params': net.box_regressor.parameters(), 'lr': 0.001 },
+    ], lr=0.001) #, momentum=0.9, nesterov=True, weight_decay=0.0005)
 
     validation_images, validation_gt_boxes = generate_segmentation_batch(validation_size)
     train_images, train_gt_boxes = generate_segmentation_batch(train_size)
@@ -191,32 +234,44 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     num_batches = len(train_images) // batch_size
 
     for epoch in tqdm(range(num_epochs)):
-        indicies = np.random.choice(range(len(train_images)), len(train_images))
+        indicies = np.random.choice(range(len(train_images)), len(train_images), replace=False)
 
         training_loss = 0.0
+        training_cls_loss = 0.0
+        training_reg_loss = 0.0
         for i in tqdm(range(num_batches)):
             batch_indicies = indicies[i * batch_size:i * batch_size + batch_size]
             image_batch, gt_boxes_batch = train_images[batch_indicies], train_gt_boxes[batch_indicies]
             image_batch = cuda_pls(Variable(torch.from_numpy(image_batch.astype(np.float32))))
 
             optimizer.zero_grad()
-            box_scores, anchors = net(image_batch)
+            box_scores, box_deltas, anchors = net(image_batch)
 
-            loss = rpn_classifier_loss(gt_boxes_batch, box_scores, anchors, image_batch)
-            loss.backward()
+            cls_loss = rpn_classifier_loss(gt_boxes_batch, box_scores, anchors)
+            reg_loss = rpn_regressor_loss(gt_boxes_batch, box_deltas, anchors)
+            combined_loss = cls_loss + reg_loss
+            combined_loss.backward()
             optimizer.step()
-            training_loss += loss.data[0] / num_batches
+            training_cls_loss += cls_loss.data[0] / num_batches
+            training_reg_loss += reg_loss.data[0] / num_batches
+            training_loss += combined_loss.data[0] / num_batches
 
-        validation_scores, validation_anchors = net(validation_images)
-        # fg_scores = validation_scores[0][:, 1].data.cpu().numpy()
-        # top_prediction_indicies = np.argsort(fg_scores)[::-1]
-        # predicted_boxes = anchors[top_prediction_indicies[:10]]
-        # img = validation_images[0].data.cpu().numpy()
-        # img = (img - img.min()) / (img.max() - img.min())
-        # display_image_and_boxes(img, predicted_boxes)
+        validation_scores, validation_deltas, validation_anchors = net(validation_images)
+        fg_scores = validation_scores[0][:, 1].data.cpu().numpy()
+        top_prediction_indicies = np.argsort(fg_scores)[::-1]
+        predicted_boxes = anchors[top_prediction_indicies[:20]]
+        predicted_deltas = validation_deltas[0].data.cpu().numpy()[top_prediction_indicies[:20]]
 
-        validation_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors, validation_images)
-        tqdm.write(f'epoch: {epoch} - val: {validation_loss.data[0]:.5f} - train: {training_loss:.5f}')
+        actual_boxes = construct_boxes(predicted_deltas, predicted_boxes)
+
+        img = validation_images[0].data.cpu().numpy()
+        img = (img - img.min()) / (img.max() - img.min())
+        display_image_and_boxes(img, actual_boxes)
+
+        validation_cls_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors)
+        validation_reg_loss = rpn_regressor_loss(validation_gt_boxes, validation_deltas, validation_anchors)
+        validation_loss = validation_cls_loss + validation_reg_loss
+        tqdm.write(f'epoch: {epoch} - val reg: {validation_reg_loss.data[0]:.5f} - val cls: {validation_cls_loss.data[0]:.5f} - train reg: {training_reg_loss:.5f} - train cls: {training_cls_loss:.5f}')
 
 def prof():
     import profile
