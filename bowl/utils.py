@@ -38,19 +38,30 @@ def generate_segmentation_image(shape):
             continue
 
         random_color = tuple(np.random.randint(10, 255, 3))
-        if np.random.rand() > 0.5:
+        if np.random.rand() > 10.5:
             draw.ellipse(bbox, fill=random_color)
             mask_draw.ellipse(bbox, fill=255)
         else:
             draw.rectangle(bbox, fill=random_color)
             mask_draw.rectangle(bbox, fill=255)
 
-        x0, x1 = np.clip(bbox[::2], 0, shape[0])
-        y0, y1 = np.clip(bbox[1::2], 0, shape[1])
+        x0, x1 = bbox[::2]
+        y0, y1 = bbox[1::2]
+        x0 -= 2
+        x1 += 1
+        y0 -= 2
+        y1 += 1
+
+        # x0, x1 = np.clip(bbox[::2], 0, shape[0])
+        # y0, y1 = np.clip(bbox[1::2], 0, shape[1])
+        # y0, y1
+
+
+
         bboxes.append([x0, y0, x1, y1])
         masks.append(mask)
 
-    return np.array(image), np.array(bboxes), np.array(list(map(np.array, masks))).shape
+    return np.array(image), np.array(bboxes), np.array(list(map(np.array, masks))) / 255
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
