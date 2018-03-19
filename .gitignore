@@ -50,3 +50,7 @@ logdir
 *.hdf5
 /data
 /osm
+
+*.so
+*.o
+*.pyc
