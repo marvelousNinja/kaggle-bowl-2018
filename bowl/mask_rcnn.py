@@ -171,21 +171,22 @@ def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
     all_gt_masks = []
 
     for i in range(deltas.shape[0]):
-        labels, gt_indicies = as_labels_and_gt_indicies(anchors, gt_boxes[i], include_min=False, threshold=0.5)
+        image_pr_boxes = construct_boxes(to_numpy(deltas[i]), anchors)
+        labels, gt_indicies = as_labels_and_gt_indicies(image_pr_boxes, gt_boxes[i], include_min=False, threshold=0.5)
         positive = np.where(labels == 1)
 
-        if len(positive) == 0:
+        if len(positive[0]) == 0:
             continue
 
-        image_gt_boxes = gt_boxes[i][gt_indicies[positive]]
+        image_pr_boxes = image_pr_boxes[positive]
         image_gt_masks = gt_masks[i][gt_indicies[positive]][:, np.newaxis, :, :]
         image_gt_masks = crop_and_resize(
             from_numpy(image_gt_masks),
             from_numpy(np.clip(np.column_stack([
-                image_gt_boxes[:, 1],
-                image_gt_boxes[:, 0],
-                image_gt_boxes[:, 3],
-                image_gt_boxes[:, 2]
+                image_pr_boxes[:, 1],
+                image_pr_boxes[:, 0],
+                image_pr_boxes[:, 3],
+                image_pr_boxes[:, 2]
             ]) / 223, 0, 1)),
             from_numpy(np.arange(len(image_gt_masks)), np.int32)
         )
@@ -194,6 +195,9 @@ def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
 
         all_pr_masks.extend(image_pr_masks)
         all_gt_masks.extend(image_gt_masks)
+
+    if len(all_pr_masks) == 0:
+        return from_numpy(np.array([0]))
 
     return F.binary_cross_entropy_with_logits(torch.cat(all_pr_masks), torch.cat(all_gt_masks))
 
