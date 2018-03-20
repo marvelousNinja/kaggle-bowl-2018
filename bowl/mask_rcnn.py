@@ -96,23 +96,20 @@ class MaskRCNN(nn.Module):
         boxes = []
         box_indicies = []
         for i in range(box_deltas.shape[0]):
-            image_boxes = construct_boxes(to_numpy(box_deltas.view(box_deltas.shape[0], -1, 4)[i]), self.anchor_grid.reshape(-1, 4))
+            image_boxes = construct_boxes(to_numpy(box_deltas[i]), self.anchor_grid.reshape(-1, 4))
 
             new_boxes = np.column_stack([
                 image_boxes[:, 1],
                 image_boxes[:, 0],
                 image_boxes[:, 3],
                 image_boxes[:, 2]
-            ])
+            ]) / 223
 
             boxes.extend(new_boxes)
             box_indicies.extend([i] * len(image_boxes))
 
-        boxes = np.clip(np.array(boxes), 0, 223).astype(np.int32) / 223
-        boxes = np.array(boxes).astype(np.float32)
         box_indicies = np.array(box_indicies).astype(np.int32)
-
-        boxes = from_numpy(boxes)
+        boxes = from_numpy(np.array(boxes))
         box_indicies = from_numpy(box_indicies, dtype=np.int32)
 
         crops = self.crop_and_resize(cnn_map, boxes, box_indicies)
@@ -182,15 +179,15 @@ def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
         image_gt_masks = gt_masks[i][gt_indicies[positive]][:, np.newaxis, :, :]
         image_gt_masks = crop_and_resize(
             from_numpy(image_gt_masks),
-            from_numpy(np.clip(np.column_stack([
+            from_numpy(np.column_stack([
                 image_pr_boxes[:, 1],
                 image_pr_boxes[:, 0],
                 image_pr_boxes[:, 3],
                 image_pr_boxes[:, 2]
-            ]) / 223, 0, 1)),
+            ]) / 223),
             from_numpy(np.arange(len(image_gt_masks)), np.int32)
         )
-        image_gt_masks = image_gt_masks[:, 0, :, :]
+        image_gt_masks = image_gt_masks[:, 0, :, :].round()
         image_pr_masks = masks[i][positive][:, 0, :, :]
 
         all_pr_masks.extend(image_pr_masks)
@@ -241,23 +238,23 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
             training_loss += combined_loss.data[0] / num_batches
 
         validation_scores, validation_deltas, validation_anchors, validation_predicted_masks = net(validation_images)
-        fg_scores = to_numpy(validation_scores[0][:, 1])
-        top_prediction_indicies = np.argsort(fg_scores)[::-1]
-        predicted_boxes = anchors[top_prediction_indicies[:5]]
-        predicted_deltas = to_numpy(validation_deltas[0])[top_prediction_indicies[:5]]
-        predicted_masks = to_numpy(validation_predicted_masks[0])[top_prediction_indicies[:5]]
+        # fg_scores = to_numpy(validation_scores[0][:, 1])
+        # top_prediction_indicies = np.argsort(fg_scores)[::-1]
+        # predicted_boxes = anchors[top_prediction_indicies[:5]]
+        # predicted_deltas = to_numpy(validation_deltas[0])[top_prediction_indicies[:5]]
+        # predicted_masks = to_numpy(validation_predicted_masks[0])[top_prediction_indicies[:5]]
 
-        actual_boxes = construct_boxes(predicted_deltas, predicted_boxes)
+        # actual_boxes = construct_boxes(predicted_deltas, predicted_boxes)
 
-        img = to_numpy(validation_images[0])
-        img = (img - img.min()) / (img.max() - img.min())
-        display_image_and_boxes(img, actual_boxes, predicted_masks)
+        # img = to_numpy(validation_images[0])
+        # img = (img - img.min()) / (img.max() - img.min())
+        # display_image_and_boxes(img, actual_boxes, predicted_masks)
 
         validation_cls_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors)
         validation_reg_loss = rpn_regressor_loss(validation_gt_boxes, validation_deltas, validation_anchors)
         validation_mask_loss = mask_loss(validation_deltas, validation_anchors, validation_predicted_masks, validation_gt_boxes, validation_masks)
         total_validation_loss = validation_cls_loss.data[0] + validation_reg_loss.data[0] + validation_mask_loss.data[0]
-        reduce_lr.step(total_validation_loss)
+        # reduce_lr.step(total_validation_loss)
         tqdm.write(f'epoch: {epoch} - val reg: {validation_reg_loss.data[0]:.5f} - val cls: {validation_cls_loss.data[0]:.5f} - val mask: {validation_mask_loss.data[0]:.5f} - train reg: {training_reg_loss:.5f} - train cls: {training_cls_loss:.5f} - train mask: {training_mask_loss:.5f}')
 
 def prof():
