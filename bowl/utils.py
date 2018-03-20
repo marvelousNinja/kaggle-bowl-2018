@@ -85,18 +85,23 @@ def display_image_and_boxes(image, boxes, masks=None):
 
     if masks is not None:
         plt.subplot(122)
+        plt.cla()
+        _, ax = plt.gcf(), plt.gca()
         full = np.zeros(shape=image.shape[1:3])
         for (x1, y1, x2, y2), mask in zip(boxes, masks):
             height = y2 - y1
             width = x2 - x1
 
             if height > 0 and width > 0:
-                torch_mask = Variable(torch.from_numpy(mask))
+                torch_mask = torch.nn.functional.sigmoid(Variable(torch.from_numpy(mask)))
                 predicted_mask = torch.nn.functional.upsample(torch_mask.unsqueeze(dim=0), size=(int(height), int(width)), mode='bilinear')[0][0]
                 predicted_mask = predicted_mask.round().data.cpu().numpy()
                 full[y1:y2, x1:x2] = predicted_mask
 
         plt.imshow(full)
+        for (x1, y1, x2, y2) in boxes:
+            rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1,linewidth=1,edgecolor='r',facecolor='none')
+            ax.add_patch(rect)
 
     plt.draw()
     plt.pause(1e-17)
