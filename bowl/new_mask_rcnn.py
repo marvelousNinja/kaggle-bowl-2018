@@ -152,17 +152,18 @@ def rpn_classifier_loss(gt_boxes, box_scores, anchors):
     return F.cross_entropy(box_scores.view(-1, 2), from_numpy(np.array(all_labels), dtype=np.int64), ignore_index=-1)
 
 def rpn_regressor_loss(gt_boxes, box_deltas, anchors):
-    total_loss = from_numpy(np.array([0]))
-    for image_box_deltas, image_gt_boxes in zip(box_deltas, gt_boxes):
-        labels, indicies = as_labels_and_gt_indicies(anchors, image_gt_boxes)
-        positive_samples = np.argwhere(labels == 1).reshape(-1)
-        positive_indicies = indicies[positive_samples]
-        positive_deltas = image_box_deltas[[positive_samples]]
-        positive_gt_boxes = image_gt_boxes[positive_indicies]
-        positive_anchors = anchors[positive_samples]
-        true_deltas = construct_deltas(positive_gt_boxes, positive_anchors)
-        total_loss += F.smooth_l1_loss(positive_deltas, from_numpy(true_deltas))
-    return total_loss / box_deltas.shape[0]
+    all_gt_deltas = []
+    all_pr_deltas = []
+
+    for i in range(box_deltas.shape[0]):
+        labels, gt_indicies = as_labels_and_gt_indicies(anchors, gt_boxes[i])
+        positive = np.where(labels == 1)
+        pr_deltas = box_deltas[i][positive]
+        gt_deltas = construct_deltas(gt_boxes[i][gt_indicies[positive]], anchors[positive])
+        all_gt_deltas.extend(gt_deltas)
+        all_pr_deltas.extend(pr_deltas)
+
+    return F.smooth_l1_loss(torch.stack(all_pr_deltas), from_numpy(np.array(all_gt_deltas)))
 
 def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
     crop_and_resize = CropAndResizeFunction(14, 14)
