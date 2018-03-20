@@ -145,11 +145,11 @@ def as_labels_and_gt_indicies(anchors, gt_boxes, include_min=True, threshold=0.7
     return labels, gt_indicies
 
 def rpn_classifier_loss(gt_boxes, box_scores, anchors):
-    total_loss = from_numpy(np.array([0]))
-    for image_box_scores, image_gt_boxes in zip(box_scores, gt_boxes):
+    all_labels = []
+    for image_gt_boxes in gt_boxes:
         labels, _ = as_labels_and_gt_indicies(anchors, image_gt_boxes)
-        total_loss += F.cross_entropy(image_box_scores, from_numpy(labels, dtype=np.int64), ignore_index=-1)
-    return total_loss / box_scores.shape[0]
+        all_labels.extend(labels)
+    return F.cross_entropy(box_scores.view(-1, 2), from_numpy(np.array(all_labels), dtype=np.int64), ignore_index=-1)
 
 def rpn_regressor_loss(gt_boxes, box_deltas, anchors):
     total_loss = from_numpy(np.array([0]))
@@ -166,14 +166,11 @@ def rpn_regressor_loss(gt_boxes, box_deltas, anchors):
 
 def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
     crop_and_resize = CropAndResizeFunction(14, 14)
-    total_loss = from_numpy(np.array([0]))
-
     all_pr_masks = []
     all_gt_masks = []
 
     for i in range(deltas.shape[0]):
         labels, gt_indicies = as_labels_and_gt_indicies(anchors, gt_boxes[i], include_min=False, threshold=0.5)
-        image_pr_boxes = construct_boxes(to_numpy(deltas[i]), anchors)
         positive = np.where(labels == 1)
 
         if len(positive) == 0:
@@ -246,7 +243,7 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
 
         img = to_numpy(validation_images[0])
         img = (img - img.min()) / (img.max() - img.min())
-        # display_image_and_boxes(img, actual_boxes, predicted_masks)
+        display_image_and_boxes(img, actual_boxes, predicted_masks)
 
         validation_cls_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors)
         validation_reg_loss = rpn_regressor_loss(validation_gt_boxes, validation_deltas, validation_anchors)
