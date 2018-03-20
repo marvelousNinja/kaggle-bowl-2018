@@ -29,9 +29,10 @@ def construct_deltas(gt_boxes, anchors):
     t_y = (gt_boxes[:, 1] - anchors[:, 1]) / h_a
     t_w = np.log(w_gt / w_a)
     t_h = np.log(h_gt / h_a)
-    return np.column_stack((t_x, t_y, t_w, t_h))
+    return np.column_stack((t_x, t_y, t_w, t_h)) / [0.3, 0.3, 0.3, 0.3] #[0.1, 0.1, 0.2, 0.2]
 
 def construct_boxes(deltas, anchors):
+    deltas = deltas * [0.3, 0.3, 0.3, 0.3]
     w_a = anchors[:, 2] - anchors[:, 0]
     h_a = anchors[:, 3] - anchors[:, 1]
     x_a = anchors[:, 0]
