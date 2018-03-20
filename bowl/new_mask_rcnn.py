@@ -72,7 +72,7 @@ class MaskRCNN(nn.Module):
             nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.Conv2d(128, 2, kernel_size=1, stride=1, padding=0),
-            nn.Sigmoid()
+            # nn.Sigmoid()
         )
 
     def rpn_forward(self, cnn_map):
@@ -164,59 +164,44 @@ def rpn_regressor_loss(gt_boxes, box_deltas, anchors):
         total_loss += F.smooth_l1_loss(positive_deltas, from_numpy(true_deltas))
     return total_loss / box_deltas.shape[0]
 
-def mask_loss(gt_boxes_batch, box_deltas, anchors, predicted_masks, gt_masks):
-    total_loss = from_numpy(np.array([0]))
-    total_masks_with_loss = 0
-
+def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
     crop_and_resize = CropAndResizeFunction(14, 14)
-    crop_and_resize.requires_grad = False
+    total_loss = from_numpy(np.array([0]))
 
-    for image_box_deltas, image_gt_boxes, image_predicted_masks, image_gt_masks in zip(box_deltas, gt_boxes_batch, predicted_masks, gt_masks):
-        predicted_boxes = construct_boxes(to_numpy(image_box_deltas), anchors)
-        labels, indicies = as_labels_and_gt_indicies(predicted_boxes, image_gt_boxes, include_min=False, threshold=0.5)
-        positive_samples = np.argwhere(labels == 1).reshape(-1)
+    all_pr_masks = []
+    all_gt_masks = []
 
-        if len(positive_samples) == 0:
+    for i in range(deltas.shape[0]):
+        labels, gt_indicies = as_labels_and_gt_indicies(anchors, gt_boxes[i], include_min=False, threshold=0.5)
+        image_pr_boxes = construct_boxes(to_numpy(deltas[i]), anchors)
+        positive = np.where(labels == 1)
+
+        if len(positive) == 0:
             continue
 
-        positive_indicies = indicies[positive_samples]
-        positive_deltas = image_box_deltas[[positive_samples]]
-        positive_gt_boxes = image_gt_boxes[positive_indicies]
-        positive_gt_masks = image_gt_masks[positive_indicies]
-        positive_anchors = anchors[positive_samples]
-        predicted_boxes = construct_boxes(to_numpy(positive_deltas), positive_anchors)
-        predicted_boxes = np.clip(predicted_boxes, 0, 223).astype(np.int32)
-        positive_predicted_masks = image_predicted_masks[[positive_samples]]
+        image_gt_boxes = gt_boxes[i][gt_indicies[positive]]
+        image_gt_masks = gt_masks[i][gt_indicies[positive]][:, np.newaxis, :, :]
+        image_gt_masks = crop_and_resize(
+            from_numpy(image_gt_masks),
+            from_numpy(np.clip(np.column_stack([
+                image_gt_boxes[:, 1],
+                image_gt_boxes[:, 0],
+                image_gt_boxes[:, 3],
+                image_gt_boxes[:, 2]
+            ]) / 223, 0, 1)),
+            from_numpy(np.arange(len(image_gt_masks)), np.int32)
+        )
+        image_gt_masks = image_gt_masks[:, 0, :, :]
+        image_pr_masks = masks[i][positive][:, 0, :, :]
 
-        mask_bboxes = []
-        mask_indicies = []
-        for (x1, y1, x2, y2), one_mask in zip(predicted_boxes, positive_gt_masks):
-            mask_bboxes.append([y1, x1, y2, x2])
-            mask_indicies.append(len(mask_bboxes) - 1)
+        all_pr_masks.extend(image_pr_masks)
+        all_gt_masks.extend(image_gt_masks)
 
-
-        mask_bboxes = (np.array(mask_bboxes) / 223).astype(np.float32)
-        mask_bboxes = from_numpy(mask_bboxes)
-        mask_indicies = from_numpy(np.array(mask_indicies), dtype=np.int32)
-        positive_gt_masks = positive_gt_masks[:, np.newaxis, :, :]
-        positive_gt_masks = from_numpy(positive_gt_masks)
-        target_masks = crop_and_resize(positive_gt_masks, mask_bboxes, mask_indicies).round()
-        target_masks = from_numpy(to_numpy(target_masks.detach()))
-
-        for predicted_mask, target_mask in zip(positive_predicted_masks, target_masks):
-            if (target_mask.shape[0] == 0) or (target_mask.shape[1] == 0):
-                continue
-
-            predicted_mask = predicted_mask[0]
-            target_mask = target_mask[0]
-            total_loss += F.binary_cross_entropy(predicted_mask, target_mask)
-            total_masks_with_loss += 1
-
-    return total_loss / (total_masks_with_loss + 1.0)
+    return F.binary_cross_entropy_with_logits(torch.cat(all_pr_masks), torch.cat(all_gt_masks))
 
 def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     net = as_cuda(MaskRCNN())
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001)
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001, weight_decay=0.0001)
 
     validation_images, validation_gt_boxes, validation_masks = generate_segmentation_batch(validation_size)
     train_images, train_gt_boxes, train_masks = generate_segmentation_batch(train_size)
@@ -240,7 +225,7 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
 
             cls_loss = rpn_classifier_loss(gt_boxes_batch, box_scores, anchors)
             reg_loss = rpn_regressor_loss(gt_boxes_batch, box_deltas, anchors)
-            _mask_loss = mask_loss(gt_boxes_batch, box_deltas, anchors, predicted_masks, gt_masks_batch)
+            _mask_loss = mask_loss(box_deltas, anchors, predicted_masks, gt_boxes_batch, gt_masks_batch)
 
             combined_loss = cls_loss + reg_loss + _mask_loss
             combined_loss.backward()
@@ -265,7 +250,7 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
 
         validation_cls_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors)
         validation_reg_loss = rpn_regressor_loss(validation_gt_boxes, validation_deltas, validation_anchors)
-        validation_mask_loss = mask_loss(validation_gt_boxes, validation_deltas, validation_anchors, validation_predicted_masks, validation_masks)
+        validation_mask_loss = mask_loss(validation_deltas, validation_anchors, validation_predicted_masks, validation_gt_boxes, validation_masks)
         tqdm.write(f'epoch: {epoch} - val reg: {validation_reg_loss.data[0]:.5f} - val cls: {validation_cls_loss.data[0]:.5f} - val mask: {validation_mask_loss.data[0]:.5f} - train reg: {training_reg_loss:.5f} - train cls: {training_cls_loss:.5f} - train mask: {training_mask_loss:.5f}')
 
 def prof():
