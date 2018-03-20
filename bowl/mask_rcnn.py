@@ -199,7 +199,10 @@ def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
 
 def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     net = as_cuda(MaskRCNN())
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001, weight_decay=0.0001)
+    optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=0.01, momentum=0.9, weight_decay=0.0001)
+    reduce_lr = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, factor=0.1, patience=5, verbose=True, threshold=0.0001, cooldown=0, min_lr=1e-06, eps=1e-08
+    )
 
     validation_images, validation_gt_boxes, validation_masks = generate_segmentation_batch(validation_size)
     train_images, train_gt_boxes, train_masks = generate_segmentation_batch(train_size)
@@ -249,6 +252,8 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
         validation_cls_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors)
         validation_reg_loss = rpn_regressor_loss(validation_gt_boxes, validation_deltas, validation_anchors)
         validation_mask_loss = mask_loss(validation_deltas, validation_anchors, validation_predicted_masks, validation_gt_boxes, validation_masks)
+        total_validation_loss = validation_cls_loss.data[0] + validation_reg_loss.data[0] + validation_mask_loss.data[0]
+        reduce_lr.step(total_validation_loss)
         tqdm.write(f'epoch: {epoch} - val reg: {validation_reg_loss.data[0]:.5f} - val cls: {validation_cls_loss.data[0]:.5f} - val mask: {validation_mask_loss.data[0]:.5f} - train reg: {training_reg_loss:.5f} - train cls: {training_cls_loss:.5f} - train mask: {training_mask_loss:.5f}')
 
 def prof():
