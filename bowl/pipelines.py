@@ -61,6 +61,9 @@ def normalize(image):
     image[:, :, 2] /= std[2]
     return image
 
+def non_empty(mask):
+    return np.max(mask) > 0
+
 def pipeline(image_id):
     image, masks = read_image_by_id(image_id)
     image = resize(224, 224, image)
@@ -69,6 +72,7 @@ def pipeline(image_id):
 
     masks = map(partial(resize, 224, 224), masks)
     masks = map(to_binary_mask, masks)
+    masks = filter(non_empty, masks)
     masks = np.array(list(masks))
 
     bboxes = np.array(list(map(mask_to_bounding_box, masks)))
