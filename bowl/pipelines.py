@@ -1,4 +1,5 @@
 import glob
+import os
 from functools import partial
 
 import cv2
@@ -6,6 +7,16 @@ import numpy as np
 
 def read_image(path):
     return cv2.cvtColor(cv2.imread(path), cv2.COLOR_BGR2RGB)
+
+def get_train_image_ids():
+    return list_dirs_in('./data/train')[10:]
+
+def get_validation_image_ids():
+    return list_dirs_in('./data/train')[:10]
+
+def list_dirs_in(path):
+    dirs = [dir for dir in os.listdir(path) if not dir.startswith('.')]
+    return np.sort(dirs)
 
 def list_images_in(path):
     extensions = ['png']

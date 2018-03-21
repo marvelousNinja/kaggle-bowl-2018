@@ -9,6 +9,8 @@ from torchvision.models import resnet18
 from roi_align.crop_and_resize import CropAndResizeFunction
 
 from bowl.pipelines import pipeline
+from bowl.pipelines import get_train_image_ids
+from bowl.pipelines import get_validation_image_ids
 from bowl.toy_shapes import generate_segmentation_batch
 from bowl.utils import construct_boxes
 from bowl.utils import construct_deltas
@@ -210,11 +212,7 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
     # train_images, train_gt_boxes, train_masks = generate_segmentation_batch(train_size)
     # validation_images = from_numpy(validation_images.astype(np.float32))
 
-    validation_ids = [
-        '0a7d30b252359a10fd298b638b90cb9ada3acced4e0c0e5a3692013f432ee4e9',
-        '0acd2c223d300ea55d0546797713851e818e5c697d073b7f4091b96ce0f3d2fe'
-    ]
-
+    validation_ids = get_validation_image_ids()[:validation_size]
     validation_images = []
     validation_gt_boxes = []
     validation_masks = []
@@ -230,24 +228,7 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
 
     validation_images = from_numpy(validation_images.astype(np.float32))
 
-    train_ids = [
-        '00ae65c1c6631ae6f2be1a449902976e6eb8483bf6b0740d00530220832c6d3e',
-        '0b0d577159f0d6c266f360f7b8dfde46e16fa665138bf577ec3c6f9c70c0cd1e',
-        '0b2e702f90aee4fff2bc6e4326308d50cf04701082e718d4f831c8959fbcda93',
-        '0bda515e370294ed94efd36bd53782288acacb040c171df2ed97fd691fc9d8fe',
-        '0bf4b144167694b6846d584cf52c458f34f28fcae75328a2a096c8214e01c0d0',
-        '0bf33d3db4282d918ec3da7112d0bf0427d4eafe74b3ee0bb419770eefe8d7d6',
-        '0c2550a23b8a0f29a7575de8c61690d3c31bc897dd5ba66caec201d201a278c2',
-        '0c6507d493bf79b2ba248c5cca3d14df8b67328b89efa5f4a32f97a06a88c92c',
-        '0d2bf916cc8de90d02f4cd4c23ea79b227dbc45d845b4124ffea380c92d34c8c',
-        '0d3640c1f1b80f24e94cc9a5f3e1d9e8db7bf6af7d4aba920265f46cadc25e37',
-        '0ddd8deaf1696db68b00c600601c6a74a0502caaf274222c8367bdc31458ae7e',
-        '0e4c2e2780de7ec4312f0efcd86b07c3738d21df30bb4643659962b4da5505a3',
-        '0e5edb072788c7b1da8829b02a49ba25668b09f7201cf2b70b111fc3b853d14f',
-        '0e21d7b3eea8cdbbed60d51d72f4f8c1974c5d76a8a3893a7d5835c85284132e',
-        '0ea221716cf13710214dcd331a61cea48308c3940df1d28cfc7fd817c83714e1'
-    ]
-
+    train_ids = get_train_image_ids()[:train_size]
     train_images = []
     train_gt_boxes = []
     train_masks = []
