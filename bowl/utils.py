@@ -49,8 +49,8 @@ def generate_anchor_grid(base, scales, ratios, grid_shape):
     anchors = np.zeros((grid_shape[0], grid_shape[1], len(scales) * len(ratios), 4), dtype=np.float32)
     for y_diff in range(grid_shape[0]):
         for x_diff in range(grid_shape[0]):
+            anchor_index = 0
             for scale in scales:
-                anchor_index = 0
                 for ratio in ratios:
                     width = int(base / ratio * scale)
                     height = int(base * ratio * scale)
