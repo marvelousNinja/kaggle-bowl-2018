@@ -67,7 +67,7 @@ def generate_segmentation_batch(size):
 
     for _ in range(size):
         image, bboxes, image_masks = generate_segmentation_image((224, 224))
-        image = np.swapaxes(image, 0, 2)
+        image = np.moveaxis(image, 2, 0)
         images.append(image)
         gt_boxes.append(bboxes)
         masks.append(image_masks)

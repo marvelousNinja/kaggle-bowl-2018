@@ -83,11 +83,11 @@ class MaskRCNN(nn.Module):
         # Since scores were received from 1x1 conv, order is important here
         # Order of anchors and scores should be exactly the same
         # Otherwise, network will never converge
-        box_scores = box_scores.permute(0, 3, 2, 1).contiguous()
+        box_scores = box_scores.permute(0, 2, 3, 1).contiguous()
         box_scores = box_scores.view(box_scores.shape[0], box_scores.shape[1], box_scores.shape[2], self.anchors_per_location, 2)
         box_scores = box_scores.view(box_scores.shape[0], -1, 2)
 
-        box_deltas = box_deltas.permute(0, 3, 2, 1).contiguous()
+        box_deltas = box_deltas.permute(0, 2, 3, 1).contiguous()
         box_deltas = box_deltas.view(box_deltas.shape[0], box_deltas.shape[1], box_deltas.shape[2], self.anchors_per_location, 4)
         box_deltas = box_deltas.view(box_deltas.shape[0], -1, 4)
         return box_scores, box_deltas

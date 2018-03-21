@@ -78,7 +78,7 @@ def display_image_and_boxes(image, boxes, masks=None):
     plt.subplot(121)
     plt.cla()
     _, ax = plt.gcf(), plt.gca()
-    ax.imshow(np.swapaxes(image, 0, 2))
+    ax.imshow(np.moveaxis(image, 0, 2))
 
     for (x1, y1, x2, y2) in boxes:
         rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1,linewidth=1,edgecolor='r',facecolor='none')
