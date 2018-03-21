@@ -49,10 +49,6 @@ def generate_segmentation_image(shape):
 
         x0, x1 = bbox[::2]
         y0, y1 = bbox[1::2]
-        x0 -= 2
-        x1 += 1
-        y0 -= 2
-        y1 += 1
         x0, x1 = np.clip([x0, x1], 0, shape[1])
         y0, y1 = np.clip([y0, y1], 0, shape[0])
         bboxes.append([x0, y0, x1, y1])

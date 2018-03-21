@@ -6,6 +6,10 @@ import matplotlib.patches as patches
 import torch
 from torch.autograd import Variable
 
+def mask_to_bounding_box(mask):
+    a = np.where(mask != 0)
+    return np.array([np.min(a[1]), np.min(a[0]), np.max(a[1]), np.max(a[0])])
+
 def normalize(image_batch):
     image_batch = image_batch.astype(np.float32)
     image_batch /= 255
