@@ -21,6 +21,31 @@ from bowl.utils import from_numpy
 from bowl.utils import to_numpy
 from bowl.utils import as_cuda
 
+def nms(deltas, scores, anchors, score_threshold=0.5, iou_threshold=0.3):
+    bbox_indicies = []
+    img_indicies = []
+
+    for i in range(deltas.shape[0]):
+        image_bboxes = construct_boxes(to_numpy(deltas[i]), anchors)
+        image_scores = to_numpy(scores[i])
+
+        order = list(np.argsort(image_scores).reshape(-1)[::-1])
+        keep = []
+        ious = iou(image_bboxes, image_bboxes)
+
+        while len(order) > 1:
+            top_id = order.pop(0)
+            keep.append(top_id)
+            over_threshold = np.argwhere(ious[:, top_id] > iou_threshold).reshape(-1)
+            order = [_id for _id in order if _id not in over_threshold]
+
+        positive = np.argwhere(image_scores > score_threshold).reshape(-1)
+        keep = list(set(keep) & set(positive))
+        bbox_indicies.extend(keep)
+        img_indicies.extend([i] * len(keep))
+
+    return np.array(bbox_indicies), np.array(img_indicies)
+
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
@@ -49,8 +74,8 @@ class MaskRCNN(nn.Module):
             param.requires_grad = False
 
         self.base = 16
-        self.scales = [2, 4]
-        self.ratios = [0.5, 1.0, 2.0]
+        self.scales = [2]
+        self.ratios = [1.0]
         self.anchors_per_location = len(self.scales) * len(self.ratios)
         self.image_height = 224
         self.image_width = 224
@@ -133,6 +158,9 @@ class MaskRCNN(nn.Module):
         if self.enable_masks:
             outputs['masks'] = self.mask_head_forward(x, cnn_map, box_deltas)
 
+        keep_bbox_indicies, keep_image_indicies = nms(box_deltas, F.sigmoid(box_scores)[:, :, 1], self.anchor_grid.reshape(-1, 4))
+        outputs['keep_bbox_indicies'] = keep_bbox_indicies
+        outputs['keep_image_indicies'] = keep_image_indicies
         return outputs
 
 def as_labels_and_gt_indicies(anchors, gt_boxes, include_min=True, threshold=0.7):
@@ -147,7 +175,7 @@ def as_labels_and_gt_indicies(anchors, gt_boxes, include_min=True, threshold=0.7
     # Critical hyparameter
     # Too few negatives will slow down convergence
     # Too many negatives will dominate loss function
-    max_negatives = 50 - len(np.argwhere(labels == 1).reshape(-1))
+    max_negatives = 25 - len(np.argwhere(labels == 1).reshape(-1))
     negative_samples = np.random.choice(all_negatives, min(max_negatives, len(all_negatives)) , replace=False)
     labels[negative_samples] = 0
     labels[labels == 2] = -1
@@ -211,9 +239,9 @@ def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
 
     return F.binary_cross_entropy_with_logits(torch.cat(all_pr_masks), torch.cat(all_gt_masks))
 
-def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100, enable_masks=False):
+def fit(train_size=8, validation_size=8, batch_size=4, num_epochs=10, enable_masks=False):
     net = as_cuda(MaskRCNN(enable_masks=enable_masks))
-    optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=0.01, momentum=0.9, weight_decay=0.0001)
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001, weight_decay=0.0001)
     reduce_lr = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.1, patience=5, verbose=True, threshold=0.0001, cooldown=0, min_lr=1e-06, eps=1e-08
     )
@@ -292,19 +320,23 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100, enable
         validation_scores = validation_outputs['box_scores']
         validation_deltas = validation_outputs['box_deltas']
         validation_anchors = validation_outputs['anchors']
+        validation_keep_bbox_indicies = validation_outputs['keep_bbox_indicies']
+        validation_keep_image_indicies = validation_outputs['keep_image_indicies']
 
-        # fg_scores = to_numpy(validation_scores[0][:, 1])
-        # top_prediction_indicies = np.argsort(fg_scores)[::-1]
-        # predicted_boxes = anchors[top_prediction_indicies[:20]]
-        # predicted_deltas = to_numpy(validation_deltas[0])[top_prediction_indicies[:20]]
-        # if 'masks' in validation_outputs:
-        #     predicted_masks = to_numpy(validation_outputs['masks'][0])[top_prediction_indicies[:5]]
-        # else:
-        #     predicted_masks = None
-        # actual_boxes = construct_boxes(predicted_deltas, predicted_boxes)
-        # img = to_numpy(validation_images[0])
-        # img = (img - img.min()) / (img.max() - img.min())
-        # display_image_and_boxes(img, actual_boxes, predicted_masks)
+        delta_indicies = validation_keep_bbox_indicies[validation_keep_image_indicies == 0]
+
+        if len(delta_indicies) > 0:
+            predicted_deltas = to_numpy(validation_deltas[0])[delta_indicies]
+            predicted_boxes = validation_anchors[delta_indicies]
+
+            if 'masks' in validation_outputs:
+                predicted_masks = to_numpy(validation_outputs['masks'][0])[delta_indicies]
+            else:
+                predicted_masks = None
+            actual_boxes = construct_boxes(predicted_deltas, predicted_boxes)
+            img = to_numpy(validation_images[0])
+            img = (img - img.min()) / (img.max() - img.min())
+            display_image_and_boxes(img, actual_boxes, predicted_masks, validation_gt_boxes[0], validation_masks[0])
 
         validation_cls_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors)
         validation_reg_loss = rpn_regressor_loss(validation_gt_boxes, validation_deltas, validation_anchors)

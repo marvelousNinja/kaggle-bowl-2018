@@ -72,10 +72,10 @@ def iou(bboxes_a, bboxes_b):
     area_b = np.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], axis=1)
     return area_i / (area_a[:, None] + area_b - area_i)
 
-def display_image_and_boxes(image, boxes, masks=None):
+def display_image_and_boxes(image, boxes, masks=None, gt_boxes=None, gt_masks=None):
     boxes = np.clip(boxes, 0, 223).astype(np.int32)
 
-    plt.subplot(121)
+    plt.subplot(131)
     plt.cla()
     _, ax = plt.gcf(), plt.gca()
     ax.imshow(np.moveaxis(image, 0, 2))
@@ -85,7 +85,7 @@ def display_image_and_boxes(image, boxes, masks=None):
         ax.add_patch(rect)
 
     if masks is not None:
-        plt.subplot(122)
+        plt.subplot(132)
         plt.cla()
         _, ax = plt.gcf(), plt.gca()
         full = np.zeros(shape=image.shape[1:3])
@@ -104,6 +104,20 @@ def display_image_and_boxes(image, boxes, masks=None):
             rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1,linewidth=1,edgecolor='r',facecolor='none')
             ax.add_patch(rect)
 
+    plt.subplot(133)
+    plt.cla()
+    full = np.zeros(shape=image.shape[1:3])
+    _, ax = plt.gcf(), plt.gca()
+    if gt_boxes is not None:
+        for (x1, y1, x2, y2) in gt_boxes:
+            rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1,linewidth=1,edgecolor='g',facecolor='none')
+            ax.add_patch(rect)
+
+    if gt_masks is not None:
+        for (x1, y1, x2, y2), mask in zip(gt_boxes, gt_masks):
+            full = full + mask
+
+    plt.imshow(full)
     plt.draw()
     plt.pause(1e-17)
 
