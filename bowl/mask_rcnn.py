@@ -40,7 +40,7 @@ class Backbone(nn.Module):
         return x
 
 class MaskRCNN(nn.Module):
-    def __init__(self):
+    def __init__(self, enable_masks=True):
         super(MaskRCNN, self).__init__()
 
         self.backbone = as_cuda(Backbone())
@@ -49,8 +49,8 @@ class MaskRCNN(nn.Module):
             param.requires_grad = False
 
         self.base = 16
-        self.scales = [2]
-        self.ratios = [1.0]
+        self.scales = [2, 4]
+        self.ratios = [0.5, 1.0, 2.0]
         self.anchors_per_location = len(self.scales) * len(self.ratios)
         self.image_height = 224
         self.image_width = 224
@@ -64,19 +64,22 @@ class MaskRCNN(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.crop_and_resize = CropAndResizeFunction(7, 7)
 
-        self.mask_head = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.ConvTranspose2d(128, 128, kernel_size=2, stride=2, padding=0),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.Conv2d(128, 2, kernel_size=1, stride=1, padding=0),
-            # nn.Sigmoid()
-        )
+        self.enable_masks = enable_masks
+
+        if enable_masks:
+            self.mask_head = nn.Sequential(
+                nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(256),
+                nn.ReLU(),
+                nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(128),
+                nn.ReLU(),
+                nn.ConvTranspose2d(128, 128, kernel_size=2, stride=2, padding=0),
+                nn.BatchNorm2d(128),
+                nn.ReLU(),
+                nn.Conv2d(128, 2, kernel_size=1, stride=1, padding=0),
+                # nn.Sigmoid()
+            )
 
     def rpn_forward(self, cnn_map):
         rpn_map = self.rpn_conv(cnn_map)
@@ -120,10 +123,17 @@ class MaskRCNN(nn.Module):
         return masks.view(box_deltas.shape[0], box_deltas.shape[1], 2, 14, 14)
 
     def forward(self, x):
+        outputs = {}
         cnn_map = self.backbone(x)
         box_scores, box_deltas = self.rpn_forward(cnn_map)
-        masks = self.mask_head_forward(x, cnn_map, box_deltas)
-        return box_scores, box_deltas, self.anchor_grid.reshape(-1, 4), masks
+        outputs['box_scores'] = box_scores
+        outputs['box_deltas'] = box_deltas
+        outputs['anchors'] = self.anchor_grid.reshape(-1, 4)
+
+        if self.enable_masks:
+            outputs['masks'] = self.mask_head_forward(x, cnn_map, box_deltas)
+
+        return outputs
 
 def as_labels_and_gt_indicies(anchors, gt_boxes, include_min=True, threshold=0.7):
     ious = iou(anchors, gt_boxes)
@@ -201,8 +211,8 @@ def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
 
     return F.binary_cross_entropy_with_logits(torch.cat(all_pr_masks), torch.cat(all_gt_masks))
 
-def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
-    net = as_cuda(MaskRCNN())
+def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100, enable_masks=False):
+    net = as_cuda(MaskRCNN(enable_masks=enable_masks))
     optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=0.01, momentum=0.9, weight_decay=0.0001)
     reduce_lr = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.1, patience=5, verbose=True, threshold=0.0001, cooldown=0, min_lr=1e-06, eps=1e-08
@@ -257,11 +267,18 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
             image_batch = from_numpy(image_batch.astype(np.float32))
 
             optimizer.zero_grad()
-            box_scores, box_deltas, anchors, predicted_masks = net(image_batch)
+            outputs = net(image_batch)
+            box_deltas = outputs['box_deltas']
+            box_scores = outputs['box_scores']
+            anchors = outputs['anchors']
 
             cls_loss = rpn_classifier_loss(gt_boxes_batch, box_scores, anchors)
             reg_loss = rpn_regressor_loss(gt_boxes_batch, box_deltas, anchors)
-            _mask_loss = mask_loss(box_deltas, anchors, predicted_masks, gt_boxes_batch, gt_masks_batch)
+
+            if 'masks' in outputs:
+                _mask_loss = mask_loss(box_deltas, anchors, outputs['masks'], gt_boxes_batch, gt_masks_batch)
+            else:
+                _mask_loss = from_numpy(np.array([0]))
 
             combined_loss = cls_loss + reg_loss + _mask_loss
             combined_loss.backward()
@@ -271,24 +288,33 @@ def fit(train_size=100, validation_size=10, batch_size=8, num_epochs=100):
             training_mask_loss += _mask_loss.data[0] / num_batches
             training_loss += combined_loss.data[0] / num_batches
 
-        validation_scores, validation_deltas, validation_anchors, validation_predicted_masks = net(validation_images)
+        validation_outputs = net(validation_images)
+        validation_scores = validation_outputs['box_scores']
+        validation_deltas = validation_outputs['box_deltas']
+        validation_anchors = validation_outputs['anchors']
+
         # fg_scores = to_numpy(validation_scores[0][:, 1])
         # top_prediction_indicies = np.argsort(fg_scores)[::-1]
-        # predicted_boxes = anchors[top_prediction_indicies[:5]]
-        # predicted_deltas = to_numpy(validation_deltas[0])[top_prediction_indicies[:5]]
-        # predicted_masks = to_numpy(validation_predicted_masks[0])[top_prediction_indicies[:5]]
-
+        # predicted_boxes = anchors[top_prediction_indicies[:20]]
+        # predicted_deltas = to_numpy(validation_deltas[0])[top_prediction_indicies[:20]]
+        # if 'masks' in validation_outputs:
+        #     predicted_masks = to_numpy(validation_outputs['masks'][0])[top_prediction_indicies[:5]]
+        # else:
+        #     predicted_masks = None
         # actual_boxes = construct_boxes(predicted_deltas, predicted_boxes)
-
         # img = to_numpy(validation_images[0])
         # img = (img - img.min()) / (img.max() - img.min())
         # display_image_and_boxes(img, actual_boxes, predicted_masks)
 
         validation_cls_loss = rpn_classifier_loss(validation_gt_boxes, validation_scores, validation_anchors)
         validation_reg_loss = rpn_regressor_loss(validation_gt_boxes, validation_deltas, validation_anchors)
-        validation_mask_loss = mask_loss(validation_deltas, validation_anchors, validation_predicted_masks, validation_gt_boxes, validation_masks)
+        if 'masks' in validation_outputs:
+            validation_mask_loss = mask_loss(validation_deltas, validation_anchors, validation_outputs['masks'], validation_gt_boxes, validation_masks)
+        else:
+            validation_mask_loss = from_numpy(np.array([0]))
+
         total_validation_loss = validation_cls_loss.data[0] + validation_reg_loss.data[0] + validation_mask_loss.data[0]
-        reduce_lr.step(total_validation_loss)
+        # reduce_lr.step(total_validation_loss)
         tqdm.write(f'epoch: {epoch} - val reg: {validation_reg_loss.data[0]:.5f} - val cls: {validation_cls_loss.data[0]:.5f} - val mask: {validation_mask_loss.data[0]:.5f} - train reg: {training_reg_loss:.5f} - train cls: {training_cls_loss:.5f} - train mask: {training_mask_loss:.5f}')
 
 def prof():
