@@ -137,7 +137,7 @@ def as_labels_and_gt_indicies(anchors, gt_boxes, include_min=True, threshold=0.7
     # Critical hyparameter
     # Too few negatives will slow down convergence
     # Too many negatives will dominate loss function
-    max_negatives = 25 - len(np.argwhere(labels == 1))
+    max_negatives = 50 - len(np.argwhere(labels == 1).reshape(-1))
     negative_samples = np.random.choice(all_negatives, min(max_negatives, len(all_negatives)) , replace=False)
     labels[negative_samples] = 0
     labels[labels == 2] = -1
