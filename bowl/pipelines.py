@@ -62,7 +62,14 @@ def normalize(image):
     return image
 
 def non_empty(mask):
-    return np.max(mask) > 0
+    if np.max(mask) == 0:
+        return False
+
+    x0, y0, x1, y1 = mask_to_bounding_box(mask)
+    if (x1 - x0) * (y1 - y0) == 0:
+        return False
+
+    return True
 
 def pipeline(image_id):
     image, masks = read_image_by_id(image_id)
