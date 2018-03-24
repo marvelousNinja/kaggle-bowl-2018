@@ -29,7 +29,7 @@ def construct_deltas(gt_boxes, anchors):
     t_y = (gt_boxes[:, 1] - anchors[:, 1]) / h_a
     t_w = np.log(w_gt / w_a)
     t_h = np.log(h_gt / h_a)
-    return np.column_stack((t_x, t_y, t_w, t_h)) / [0.3, 0.3, 0.3, 0.3] #[0.1, 0.1, 0.2, 0.2]
+    return np.column_stack((t_x, t_y, t_w, t_h)) / [0.3, 0.3, 0.3, 0.3]
 
 def construct_boxes(deltas, anchors):
     deltas = deltas * [0.3, 0.3, 0.3, 0.3]
@@ -52,6 +52,7 @@ def generate_anchor_grid(base, scales, ratios, grid_shape):
             anchor_index = 0
             for scale in scales:
                 for ratio in ratios:
+                    # TODO AS: Replace with np.sqrt(ratio) to preserve area?
                     width = int(base / ratio * scale)
                     height = int(base * ratio * scale)
                     x_ctr = int(base / 2) + x_diff * base

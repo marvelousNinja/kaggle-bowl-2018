@@ -21,7 +21,7 @@ from bowl.utils import from_numpy
 from bowl.utils import to_numpy
 from bowl.utils import as_cuda
 
-def nms(deltas, scores, anchors, score_threshold=0.5, iou_threshold=0.3):
+def nms(deltas, scores, anchors, score_threshold=0.5, iou_threshold=0.5):
     bbox_indicies = []
     img_indicies = []
 
@@ -29,15 +29,15 @@ def nms(deltas, scores, anchors, score_threshold=0.5, iou_threshold=0.3):
         image_bboxes = construct_boxes(to_numpy(deltas[i]), anchors)
         image_scores = to_numpy(scores[i])
 
-        order = list(np.argsort(image_scores).reshape(-1)[::-1])
+        order = np.argsort(image_scores).reshape(-1)[::-1]
         keep = []
         ious = iou(image_bboxes, image_bboxes)
 
         while len(order) > 1:
-            top_id = order.pop(0)
+            top_id = order[0]
             keep.append(top_id)
-            over_threshold = np.argwhere(ious[:, top_id] > iou_threshold).reshape(-1)
-            order = [_id for _id in order if _id not in over_threshold]
+            under_threshold = np.argwhere(ious[:, top_id] <= iou_threshold).reshape(-1)
+            order = order[np.isin(order, under_threshold)]
 
         positive = np.argwhere(image_scores > score_threshold).reshape(-1)
         keep = list(set(keep) & set(positive))
@@ -83,10 +83,13 @@ class MaskRCNN(nn.Module):
         self.anchor_grid = generate_anchor_grid(base=self.base, scales=self.scales, ratios=self.ratios, grid_shape=self.anchor_grid_shape)
 
         # TODO AS: 32 (instead of 512) is enough for toy problem. Need to go higher for more complex tasks
-        self.rpn_conv = nn.Conv2d(256, 32, kernel_size=3, stride=1, padding=1, bias=True)
-        self.box_classifier = nn.Conv2d(32, 2 * self.anchors_per_location, kernel_size=1, stride=1, padding=0, bias=True)
-        self.box_regressor = nn.Conv2d(32, 4 * self.anchors_per_location, kernel_size=1, stride=1, padding=0, bias=True)
-        self.relu = nn.ReLU(inplace=True)
+        self.rpn_conv = nn.Sequential(
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1, bias=True),
+            nn.ReLU()
+        )
+
+        self.box_classifier = nn.Conv2d(512, 2 * self.anchors_per_location, kernel_size=1, stride=1, padding=0, bias=True)
+        self.box_regressor = nn.Conv2d(512, 4 * self.anchors_per_location, kernel_size=1, stride=1, padding=0, bias=True)
         self.crop_and_resize = CropAndResizeFunction(7, 7)
 
         self.enable_masks = enable_masks
@@ -103,24 +106,17 @@ class MaskRCNN(nn.Module):
                 nn.BatchNorm2d(128),
                 nn.ReLU(),
                 nn.Conv2d(128, 2, kernel_size=1, stride=1, padding=0),
-                # nn.Sigmoid()
             )
 
     def rpn_forward(self, cnn_map):
         rpn_map = self.rpn_conv(cnn_map)
-        rpn_map = self.relu(rpn_map)
         box_scores = self.box_classifier(rpn_map)
         box_deltas = self.box_regressor(rpn_map)
         # Since scores were received from 1x1 conv, order is important here
         # Order of anchors and scores should be exactly the same
         # Otherwise, network will never converge
-        box_scores = box_scores.permute(0, 2, 3, 1).contiguous()
-        box_scores = box_scores.view(box_scores.shape[0], box_scores.shape[1], box_scores.shape[2], self.anchors_per_location, 2)
-        box_scores = box_scores.view(box_scores.shape[0], -1, 2)
-
-        box_deltas = box_deltas.permute(0, 2, 3, 1).contiguous()
-        box_deltas = box_deltas.view(box_deltas.shape[0], box_deltas.shape[1], box_deltas.shape[2], self.anchors_per_location, 4)
-        box_deltas = box_deltas.view(box_deltas.shape[0], -1, 4)
+        box_scores = box_scores.permute(0, 2, 3, 1).contiguous().view(box_scores.shape[0], -1, 2)
+        box_deltas = box_deltas.permute(0, 2, 3, 1).contiguous().view(box_deltas.shape[0], -1, 4)
         return box_scores, box_deltas
 
     def mask_head_forward(self, x, cnn_map, box_deltas):
@@ -239,46 +235,20 @@ def mask_loss(deltas, anchors, masks, gt_boxes, gt_masks):
 
     return F.binary_cross_entropy_with_logits(torch.cat(all_pr_masks), torch.cat(all_gt_masks))
 
-def fit(train_size=8, validation_size=8, batch_size=4, num_epochs=10, enable_masks=False):
+def fit(train_size=8, validation_size=8, batch_size=4, num_epochs=10, enable_masks=False, overfit=False):
     net = as_cuda(MaskRCNN(enable_masks=enable_masks))
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.001, weight_decay=0.0001)
-    reduce_lr = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, factor=0.1, patience=5, verbose=True, threshold=0.0001, cooldown=0, min_lr=1e-06, eps=1e-08
-    )
-
-    # validation_images, validation_gt_boxes, validation_masks = generate_segmentation_batch(validation_size)
-    # train_images, train_gt_boxes, train_masks = generate_segmentation_batch(train_size)
-    # validation_images = from_numpy(validation_images.astype(np.float32))
-
-    validation_ids = get_validation_image_ids()[:validation_size]
-    validation_images = []
-    validation_gt_boxes = []
-    validation_masks = []
-    for _id in validation_ids:
-        image, bboxes, masks = pipeline(_id)
-        validation_images.append(image)
-        validation_gt_boxes.append(bboxes)
-        validation_masks.append(masks)
-
-    validation_images = np.array(validation_images)
-    validation_gt_boxes = np.array(validation_gt_boxes)
-    validation_masks = np.array(validation_masks)
-
-    validation_images = from_numpy(validation_images.astype(np.float32))
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=0.005, weight_decay=0.0001)
 
     train_ids = get_train_image_ids()[:train_size]
-    train_images = []
-    train_gt_boxes = []
-    train_masks = []
-    for _id in train_ids:
-        image, bboxes, masks = pipeline(_id)
-        train_images.append(image)
-        train_gt_boxes.append(bboxes)
-        train_masks.append(masks)
+    train_images, train_gt_boxes, train_masks = map(np.array, zip(*map(pipeline, train_ids)))
 
-    train_images = np.array(train_images)
-    train_gt_boxes = np.array(train_gt_boxes)
-    train_masks = np.array(train_masks)
+    if overfit:
+        validation_images, validation_gt_boxes, validation_masks = train_images, train_gt_boxes, train_masks
+    else:
+        validation_ids = get_validation_image_ids()[:validation_size]
+        validation_images, validation_gt_boxes, validation_masks = map(np.array, zip(*map(pipeline, validation_ids)))
+
+    validation_images = from_numpy(validation_images.astype(np.float32))
 
     num_batches = len(train_images) // batch_size
 
@@ -345,13 +315,11 @@ def fit(train_size=8, validation_size=8, batch_size=4, num_epochs=10, enable_mas
         else:
             validation_mask_loss = from_numpy(np.array([0]))
 
-        total_validation_loss = validation_cls_loss.data[0] + validation_reg_loss.data[0] + validation_mask_loss.data[0]
-        # reduce_lr.step(total_validation_loss)
         tqdm.write(f'epoch: {epoch} - val reg: {validation_reg_loss.data[0]:.5f} - val cls: {validation_cls_loss.data[0]:.5f} - val mask: {validation_mask_loss.data[0]:.5f} - train reg: {training_reg_loss:.5f} - train cls: {training_cls_loss:.5f} - train mask: {training_mask_loss:.5f}')
 
 def prof():
     import profile
-    stats = profile.run('fit()')
+    profile.run('fit()')
     import pdb; pdb.set_trace()
 if __name__ == '__main__':
     Fire()

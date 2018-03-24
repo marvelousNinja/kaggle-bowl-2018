@@ -51,8 +51,8 @@ def to_binary_mask(mask):
 def normalize(image):
     image = image.astype(np.float32)
     image /= 255
-    mean = [0.08734627, 0.08734627, 0.08734627]
-    std = [0.28179365, 0.28179365, 0.28179365]
+    mean = np.mean(image, axis=(1, 2))
+    std = np.std(image, axis=(1, 2))
     image[:, :, 0] -= mean[0]
     image[:, :, 1] -= mean[1]
     image[:, :, 2] -= mean[2]
