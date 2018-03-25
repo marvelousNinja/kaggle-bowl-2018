@@ -20,28 +20,56 @@ def normalize(image_batch):
     return image_batch
 
 def construct_deltas(gt_boxes, anchors):
-    gt_boxes = gt_boxes.astype(np.float32)
-    w_gt = gt_boxes[:, 2] - gt_boxes[:, 0]
-    h_gt = gt_boxes[:, 3] - gt_boxes[:, 1]
     w_a = anchors[:, 2] - anchors[:, 0]
     h_a = anchors[:, 3] - anchors[:, 1]
-    t_x = (gt_boxes[:, 0] - anchors[:, 0]) / w_a
-    t_y = (gt_boxes[:, 1] - anchors[:, 1]) / h_a
+    w_gt = gt_boxes[:, 2] - gt_boxes[:, 0]
+    h_gt = gt_boxes[:, 3] - gt_boxes[:, 1]
+
+    x_center_a = anchors[:, 0] + w_a * 0.5
+    y_center_a = anchors[:, 1] + h_a * 0.5
+    x_center_gt = gt_boxes[:, 0] + w_gt * 0.5
+    y_center_gt = gt_boxes[:, 1] + h_gt * 0.5
+
+    t_x = (x_center_gt - x_center_a) / w_a
+    t_y = (y_center_gt - y_center_a) / h_a
     t_w = np.log(w_gt / w_a)
     t_h = np.log(h_gt / h_a)
-    return np.column_stack((t_x, t_y, t_w, t_h)) / [0.3, 0.3, 0.3, 0.3]
+
+    return np.column_stack((
+        t_x,
+        t_y,
+        t_w,
+        t_h
+    )) / [0.3, 0.3, 0.3, 0.3]
 
 def construct_boxes(deltas, anchors):
     deltas = deltas * [0.3, 0.3, 0.3, 0.3]
+    t_x = deltas[:, 0]
+    t_y = deltas[:, 1]
+    t_w = deltas[:, 2]
+    t_h = deltas[:, 3]
+
     w_a = anchors[:, 2] - anchors[:, 0]
     h_a = anchors[:, 3] - anchors[:, 1]
-    x_a = anchors[:, 0]
-    y_a = anchors[:, 1]
+    x_center_a = anchors[:, 0] + w_a * 0.5
+    y_center_a = anchors[:, 1] + h_a * 0.5
+
+    w_gt = np.exp(t_w) * w_a
+    h_gt = np.exp(t_h) * h_a
+
+    x_center_gt = t_x * w_a + x_center_a
+    y_center_gt = t_y * h_a + y_center_a
+
+    x0 = x_center_gt - w_gt * 0.5
+    y0 = y_center_gt - h_gt * 0.5
+    x1 = x_center_gt + w_gt * 0.5
+    y1 = y_center_gt + h_gt * 0.5
+
     return np.column_stack((
-        deltas[:, 0] * w_a + x_a,
-        deltas[:, 1] * h_a + y_a,
-        deltas[:, 0] * w_a + x_a + np.exp(deltas[:, 2]) * w_a,
-        deltas[:, 1] * h_a + y_a + np.exp(deltas[:, 3]) * h_a
+        x0,
+        y0,
+        x1,
+        y1
     ))
 
 def generate_anchor_grid(base, scales, ratios, grid_shape):
