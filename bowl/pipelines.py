@@ -51,8 +51,9 @@ def to_binary_mask(mask):
 def normalize(image):
     image = image.astype(np.float32)
     image /= 255
-    mean = np.mean(image, axis=(1, 2))
-    std = np.std(image, axis=(1, 2))
+    image = image[::-1, :, :]
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
     image[:, :, 0] -= mean[0]
     image[:, :, 1] -= mean[1]
     image[:, :, 2] -= mean[2]
@@ -71,18 +72,41 @@ def non_empty(mask):
 
     return True
 
+def crop(top, left, height, width, image):
+    return image[top:top + height, left:left+width].copy()
+
+def generate_random_cropper(height, width, image_height, image_width):
+    top = np.random.randint(image_height - height)
+    left = np.random.randint(image_width - width)
+    return partial(crop, top, left, height, width)
+
+def rotate90(times, image):
+    return np.rot90(image, times)
+
+def generate_random_rotator():
+    times = np.random.randint(4)
+    return partial(rotate90, times)
+
 def pipeline(image_id):
     image, masks = read_image_by_id(image_id)
-    image = resize(224, 224, image)
+    cropper = generate_random_cropper(224, 224, image.shape[0], image.shape[1])
+    rotator = generate_random_rotator()
+    image = cropper(image)
+    image = rotator(image)
     image = channels_first(image)
     image = normalize(image)
 
-    masks = map(partial(resize, 224, 224), masks)
+    masks = map(cropper, masks)
+    masks = map(rotator, masks)
     masks = map(to_binary_mask, masks)
     masks = filter(non_empty, masks)
     masks = np.array(list(masks))
 
     bboxes = np.array(list(map(mask_to_bounding_box, masks)))
+
+    if len(bboxes) == 0:
+        # TODO AS: Oh so dumb...
+        return pipeline(image_id)
     return image, bboxes, masks
 
 if __name__ == '__main__':
