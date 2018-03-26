@@ -20,10 +20,10 @@ def normalize(image_batch):
     return image_batch
 
 def construct_deltas(gt_boxes, anchors):
-    w_a = anchors[:, 2] - anchors[:, 0]
-    h_a = anchors[:, 3] - anchors[:, 1]
-    w_gt = gt_boxes[:, 2] - gt_boxes[:, 0]
-    h_gt = gt_boxes[:, 3] - gt_boxes[:, 1]
+    w_a = anchors[:, 2] - anchors[:, 0] + 1
+    h_a = anchors[:, 3] - anchors[:, 1] + 1
+    w_gt = gt_boxes[:, 2] - gt_boxes[:, 0] + 1
+    h_gt = gt_boxes[:, 3] - gt_boxes[:, 1] + 1
 
     x_center_a = anchors[:, 0] + w_a * 0.5
     y_center_a = anchors[:, 1] + h_a * 0.5
@@ -40,17 +40,17 @@ def construct_deltas(gt_boxes, anchors):
         t_y,
         t_w,
         t_h
-    )) / [0.3, 0.3, 0.3, 0.3]
+    )) / [0.1, 0.1, 0.2, 0.2]
 
 def construct_boxes(deltas, anchors):
-    deltas = deltas * [0.3, 0.3, 0.3, 0.3]
+    deltas = deltas * [0.1, 0.1, 0.2, 0.2]
     t_x = deltas[:, 0]
     t_y = deltas[:, 1]
     t_w = deltas[:, 2]
     t_h = deltas[:, 3]
 
-    w_a = anchors[:, 2] - anchors[:, 0]
-    h_a = anchors[:, 3] - anchors[:, 1]
+    w_a = anchors[:, 2] - anchors[:, 0] + 1
+    h_a = anchors[:, 3] - anchors[:, 1] + 1
     x_center_a = anchors[:, 0] + w_a * 0.5
     y_center_a = anchors[:, 1] + h_a * 0.5
 
@@ -62,8 +62,8 @@ def construct_boxes(deltas, anchors):
 
     x0 = x_center_gt - w_gt * 0.5
     y0 = y_center_gt - h_gt * 0.5
-    x1 = x_center_gt + w_gt * 0.5
-    y1 = y_center_gt + h_gt * 0.5
+    x1 = x_center_gt + w_gt * 0.5 - 1
+    y1 = y_center_gt + h_gt * 0.5 - 1
 
     return np.column_stack((
         x0,
