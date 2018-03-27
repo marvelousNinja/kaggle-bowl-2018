@@ -40,7 +40,7 @@ def read_image_by_id_cached(image_id, cache={}):
         image, masks = read_image_by_id(image_id)
         cache[image_id] = (image, masks)
 
-    return image.copy(), masks.copy()
+    return image, masks
 
 
 def mask_to_bounding_box(mask):
@@ -74,7 +74,7 @@ def non_empty(masks):
     return masks[np.nonzero(np.max(masks, axis=(1, 2)))]
 
 def crop(top, left, height, width, image):
-    return image[top:top + height, left:left+width].copy()
+    return image[top:top + height, left:left+width]
 
 def generate_random_cropper(height, width, image_height, image_width):
     top = np.random.randint(image_height - height)
