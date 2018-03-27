@@ -106,16 +106,17 @@ class MaskRCNN(nn.Module):
         box_deltas = box_deltas.permute(0, 2, 3, 1).contiguous().view(box_deltas.shape[0], -1, 4)
         return box_scores, box_deltas
 
-    def forward(self, x):
+    def forward(self, x, enable_nms=False):
         outputs = {}
         cnn_map = self.backbone(x)
         box_scores, box_deltas = self.rpn_forward(cnn_map)
         outputs['box_scores'] = box_scores
         outputs['anchors'] = self.anchor_grid.reshape(-1, 4)
         outputs['box_deltas'] =  box_deltas
-        keep_bbox_indicies, keep_image_indicies = nms(box_deltas, F.softmax(box_scores, dim=2)[:, :, 1], self.anchor_grid.reshape(-1, 4))
-        outputs['keep_bbox_indicies'] = keep_bbox_indicies
-        outputs['keep_image_indicies'] = keep_image_indicies
+        if enable_nms:
+            keep_bbox_indicies, keep_image_indicies = nms(box_deltas, F.softmax(box_scores, dim=2)[:, :, 1], self.anchor_grid.reshape(-1, 4))
+            outputs['keep_bbox_indicies'] = keep_bbox_indicies
+            outputs['keep_image_indicies'] = keep_image_indicies
         return outputs
 
 def as_labels_and_gt_indicies(anchors, gt_boxes, threshold=0.7):
@@ -195,7 +196,7 @@ def fit(train_size=20, validation_size=1, batch_size=1, num_epochs=20, overfit=F
             optimizer.step()
             training_loss += loss.data[0] / num_batches
 
-        validation_outputs = net(validation_images)
+        validation_outputs = net(validation_images, enable_nms=True)
         validation_scores = validation_outputs['box_scores']
         validation_anchors = validation_outputs['anchors']
         validation_deltas = validation_outputs['box_deltas']
