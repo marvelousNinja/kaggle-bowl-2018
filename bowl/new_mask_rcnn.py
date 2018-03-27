@@ -293,7 +293,10 @@ def display_predictions(image, box_scores, box_deltas, keep_bbox_indicies, ancho
 
 def prof():
     import profile
-    profile.run('fit()')
+    import pstats
+    profile.run('fit()', 'fit.profile')
+    stats = pstats.Stats('fit.profile')
+    stats.sort_stats('cumulative').print_stats(15)
     import pdb; pdb.set_trace()
 if __name__ == '__main__':
     Fire()

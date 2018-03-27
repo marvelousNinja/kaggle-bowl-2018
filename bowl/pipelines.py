@@ -70,15 +70,8 @@ def normalize(image):
     image[:, :, 2] /= std[2]
     return image
 
-def non_empty(mask):
-    if np.max(mask) == 0:
-        return False
-
-    x0, y0, x1, y1 = mask_to_bounding_box(mask)
-    if (x1 - x0) * (y1 - y0) == 0:
-        return False
-
-    return True
+def non_empty(masks):
+    return masks[np.nonzero(np.max(masks, axis=(1, 2)))]
 
 def crop(top, left, height, width, image):
     return image[top:top + height, left:left+width].copy()
@@ -107,7 +100,8 @@ def pipeline(image_id):
     masks = cropper(masks)
     masks = rotator(masks)
     masks = channels_first(masks)
-    masks = filter(non_empty, masks)
+    masks = non_empty(masks)
+    masks = masks[np.nonzero(np.max(masks, axis=(1, 2)))]
     bboxes = np.array(list(map(mask_to_bounding_box, masks)))
 
     if len(bboxes) == 0:
