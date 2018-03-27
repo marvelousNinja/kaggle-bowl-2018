@@ -7,3 +7,4 @@ pip3 install http://download.pytorch.org/whl/cu80/torch-0.3.1-cp36-cp36m-linux_x
 pip3 install -r requirements.txt
 
 ./make.sh
+cp kaggle.json.sample kaggle.json
