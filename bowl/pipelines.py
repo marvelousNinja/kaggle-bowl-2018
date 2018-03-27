@@ -31,8 +31,17 @@ def read_image_by_id(image_id):
     masks = []
     for mask_path in mask_paths:
         masks.append((read_image(mask_path)))
+    return np.array(image), channels_last((np.array(masks)[:, :, :, 1] / 255).astype(np.uint8))
 
-    return np.array(image), masks
+def read_image_by_id_cached(image_id, cache={}):
+    if image_id in cache:
+        image, masks = cache[image_id]
+    else:
+        image, masks = read_image_by_id(image_id)
+        cache[image_id] = (image, masks)
+
+    return image.copy(), masks.copy()
+
 
 def mask_to_bounding_box(mask):
     a = np.where(mask != 0)
@@ -44,9 +53,8 @@ def resize(x, y, image):
 def channels_first(image):
     return np.moveaxis(image, 2, 0)
 
-def to_binary_mask(mask):
-    mask = (mask / 255).astype(np.uint8)
-    return mask[:, :, 1]
+def channels_last(image):
+    return np.moveaxis(image, 0, 2)
 
 def normalize(image):
     image = image.astype(np.float32)
@@ -88,7 +96,7 @@ def generate_random_rotator():
     return partial(rotate90, times)
 
 def pipeline(image_id):
-    image, masks = read_image_by_id(image_id)
+    image, masks = read_image_by_id_cached(image_id)
     cropper = generate_random_cropper(224, 224, image.shape[0], image.shape[1])
     rotator = generate_random_rotator()
     image = cropper(image)
@@ -96,12 +104,10 @@ def pipeline(image_id):
     image = channels_first(image)
     image = normalize(image)
 
-    masks = map(cropper, masks)
-    masks = map(rotator, masks)
-    masks = map(to_binary_mask, masks)
+    masks = cropper(masks)
+    masks = rotator(masks)
+    masks = channels_first(masks)
     masks = filter(non_empty, masks)
-    masks = np.array(list(masks))
-
     bboxes = np.array(list(map(mask_to_bounding_box, masks)))
 
     if len(bboxes) == 0:
