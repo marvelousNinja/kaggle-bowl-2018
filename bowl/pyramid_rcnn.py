@@ -4,8 +4,55 @@ import bowl.toy_shapes
 import bowl.utils
 import bowl.pipelines
 import numpy as np
-
 from tqdm import tqdm
+from roi_align.crop_and_resize import CropAndResizeFunction
+
+from nms.pth_nms import pth_nms
+def non_max_suppression_gpu(boxes, scores, iou_threshold):
+    return bowl.utils.as_cuda(pth_nms(torch.cat((boxes, scores), dim=1).data, iou_threshold))
+
+def construct_boxes_gpu(deltas, anchors):
+    anchors = bowl.utils.from_numpy(anchors)
+    deltas = deltas * bowl.utils.from_numpy(np.array([0.1, 0.1, 0.2, 0.2]))
+    t_x = deltas[:, 0]
+    t_y = deltas[:, 1]
+    t_w = deltas[:, 2]
+    t_h = deltas[:, 3]
+
+    w_a = anchors[:, 2] - anchors[:, 0] + 1
+    h_a = anchors[:, 3] - anchors[:, 1] + 1
+    x_center_a = anchors[:, 0] + w_a * 0.5
+    y_center_a = anchors[:, 1] + h_a * 0.5
+
+    w_gt = torch.exp(t_w) * w_a
+    h_gt = torch.exp(t_h) * h_a
+
+    x_center_gt = t_x * w_a + x_center_a
+    y_center_gt = t_y * h_a + y_center_a
+
+    x0 = x_center_gt - w_gt * 0.5
+    y0 = y_center_gt - h_gt * 0.5
+    x1 = x_center_gt + w_gt * 0.5 - 1
+    y1 = y_center_gt + h_gt * 0.5 - 1
+
+    return torch.stack((x0, y0, x1, y1), dim=1)
+
+from torch.autograd import Variable
+def log2(x):
+    ln2 = bowl.utils.as_cuda(Variable(torch.log(torch.FloatTensor([2.0]))))
+    return torch.log(x) / ln2
+
+def to_pyramid_index(boxes):
+    y1, x1, y2, x2 = boxes.chunk(4, dim=1)
+    h = y2 - y1 + 1
+    w = x2 - x1 + 1
+    roi_level = 4 + log2(torch.sqrt(h * w) / 224)
+    roi_level = roi_level.round().int()
+    roi_level = roi_level.clamp(2,5)
+    # Pyramid features are [p1, p2, p3, p4]
+    # p4 index is 3
+    roi_level = roi_level - 2
+    return roi_level
 
 class PyramidFeature(torch.nn.Module):
     def __init__(self, c_channels, p_channels, out_channels):
@@ -106,9 +153,9 @@ class RCNN(torch.nn.Module):
 
     def forward(self, x):
         x = self.layers(x)
-        deltas = self.regressor(x)
         logits = self.classifier(x)
-        return deltas, logits
+        deltas = self.regressor(x)
+        return logits, deltas
 
 class MaskHead(torch.nn.Module):
     def __init__(self, input_channels):
@@ -134,28 +181,50 @@ class MaskRCNN(torch.nn.Module):
         super(MaskRCNN, self).__init__()
         self.backbone = ResNetBackbone()
         self.rpns = [RPN(input_channels=256, anchors_per_location=anchors_per_location) for i in range(num_scales)]
-        # self.rpn = RPN()
-        # self.rcnn = RCNN(input_size=None, num_classes=None)
-        # self.mask_head = MaskHead(input_channels=None)
+        self.rcnn = RCNN(input_size=7 * 7 * 256, num_classes=2)
+        self.mask_head = MaskHead(input_channels=256)
 
     def forward(self, x):
         features_per_scale = self.backbone(x)
         rpn_outputs = [rpn(scale_features) for (scale_features, rpn) in zip(features_per_scale, self.rpns)]
-        logits, deltas = list(zip(*rpn_outputs))
-        logits, deltas = torch.cat(logits, dim=1), torch.cat(deltas, dim=1)
-        return logits, deltas
+        rpn_logits, rpn_deltas = list(zip(*rpn_outputs))
+        rpn_logits, rpn_deltas = torch.cat(rpn_logits, dim=1), torch.cat(rpn_deltas, dim=1)
 
-        # rpn_logits, rpn_deltas  = self.rpn(features)
-        # TODO AS: Convert logits & deltas to boxes
-        # rcnn_crops = None
-        # rcnn_logits, rcnn_deltas = self.rcnn(rcnn_crops)
+        crops = []
+        rcnn_boxes = []
+        rcnn_image_ids = []
 
-        # TODO AS: Convert logits & deltas to boxes
-        # mask_crops = None
-        # masks = self.mask_head(mask_crops)
+        for i in range(x.shape[0]):
+            boxes = construct_boxes_gpu(rpn_deltas[i], self.backbone.generate_anchors())
+            scores = torch.nn.functional.softmax(rpn_logits[i], dim=1)[:, [1]]
+            keep = non_max_suppression_gpu(boxes, scores, iou_threshold=0.7)
+            boxes = boxes[keep]
+            scores = scores[keep]
+            pyramid_index = to_pyramid_index(boxes)
+
+            for j in range(len(features_per_scale)):
+                scale_features = features_per_scale[j][[i]]
+                scale_box_indicies = (pyramid_index.view(-1) == j).nonzero().view(-1).data
+                if len(scale_box_indicies) < 1:
+                    continue
+
+                scale_boxes = boxes[(pyramid_index.view(-1) == j).nonzero().view(-1).data]
+                scale_crops = CropAndResizeFunction(7,7)(scale_features , (scale_boxes / 224).clamp(0, 1), bowl.utils.from_numpy(np.zeros(len(scale_boxes)), dtype=np.int32))
+                crops.append(scale_crops)
+                rcnn_boxes.append(scale_boxes)
+                rcnn_image_ids.append(bowl.utils.from_numpy(np.repeat(i, len(scale_boxes))))
+
+        crops = torch.cat(crops)
+        rcnn_boxes = torch.cat(rcnn_boxes)
+        rcnn_image_ids = torch.cat(rcnn_image_ids)
+
+        rcnn_logits, rcnn_deltas = self.rcnn(crops.view(crops.shape[0], -1).contiguous())
+        # rcnn_masks = self.mask_head(crops)
+
+        return rpn_logits, rpn_deltas, rcnn_logits, rcnn_deltas, rcnn_boxes, None, rcnn_image_ids
 
 def as_labels_and_gt_indicies(anchors, gt_boxes, threshold=0.7):
-    batch_size = 256
+    batch_size = 512
     ious = bowl.utils.iou(anchors, gt_boxes)
     labels = np.full(ious.shape[0], -1)
 
@@ -170,28 +239,33 @@ def as_labels_and_gt_indicies(anchors, gt_boxes, threshold=0.7):
     gt_indicies = np.argmax(ious, axis=1)
     return labels, gt_indicies
 
-def rpn_classifier_loss(gt_boxes, box_scores, anchors):
-    all_labels = []
-    for image_gt_boxes in gt_boxes:
-        labels, _ = as_labels_and_gt_indicies(anchors, image_gt_boxes)
-        all_labels.extend(labels)
-    return torch.nn.functional.cross_entropy(box_scores.view(-1, 2), bowl.utils.from_numpy(np.array(all_labels), dtype=np.int64), ignore_index=-1)
+def bbox_regressor_loss(deltas, boxes, gt_boxes):
+    labels, gt_indicies = as_labels_and_gt_indicies(boxes, gt_boxes)
+    positive = np.where(labels == 1)
+    pr_deltas = deltas[positive]
+    gt_deltas = bowl.utils.construct_deltas(gt_boxes[gt_indicies[positive]], boxes[positive])
+    gt_deltas = bowl.utils.from_numpy(gt_deltas)
+    return torch.nn.functional.smooth_l1_loss(pr_deltas, gt_deltas)
 
-def rpn_regressor_loss(gt_boxes, box_deltas, anchors):
-    all_gt_deltas = []
-    all_pr_deltas = []
+def bbox_classifier_loss(logits, boxes, gt_boxes):
+    labels, _ = as_labels_and_gt_indicies(boxes, gt_boxes)
+    labels = bowl.utils.from_numpy(np.array(labels), dtype=np.int64)
+    return torch.nn.functional.cross_entropy(logits, labels, ignore_index=-1)
 
-    for i in range(box_deltas.shape[0]):
-        labels, gt_indicies = as_labels_and_gt_indicies(anchors, gt_boxes[i])
-        positive = np.where(labels == 1)
-
-        pr_deltas = box_deltas[i][positive]
-        gt_deltas = bowl.utils.construct_deltas(gt_boxes[i][gt_indicies[positive]], anchors[positive])
-
-        all_gt_deltas.extend(gt_deltas)
-        all_pr_deltas.extend(pr_deltas)
-
-    return torch.nn.functional.smooth_l1_loss(torch.stack(all_pr_deltas), bowl.utils.from_numpy(np.array(all_gt_deltas)))
+def compute_loss(rpn_logits, rpn_deltas, rcnn_logits, rcnn_deltas, rcnn_boxes, rcnn_masks, rcnn_image_ids, anchors, gt_boxes, gt_masks):
+    total_loss = bowl.utils.from_numpy(np.array([0]))
+    for i in range(rpn_logits.shape[0]):
+        loss = bowl.utils.from_numpy(np.array([0]))
+        loss += bbox_classifier_loss(rpn_logits[i], anchors, gt_boxes[i])
+        loss += bbox_regressor_loss(rpn_deltas[i], anchors, gt_boxes[i])
+        indicies = (rcnn_image_ids.view(-1) == i).nonzero().view(-1).data
+        image_boxes = rcnn_boxes[indicies]
+        image_logits = rcnn_deltas[indicies]
+        image_deltas = rcnn_deltas[indicies]
+        loss += bbox_classifier_loss(image_logits, bowl.utils.to_numpy(image_boxes), gt_boxes[i])
+        loss += bbox_regressor_loss(image_deltas[:, 4:], bowl.utils.to_numpy(image_boxes), gt_boxes[i])
+        total_loss += loss
+    return total_loss / len(rpn_logits)
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -279,7 +353,7 @@ if __name__ == '__main__':
 
     validation_images = bowl.utils.from_numpy(validation_images.astype(np.float32))
 
-    train_size = 100
+    train_size = 10
     batch_size = 1
     train_ids = bowl.pipelines.get_train_image_ids()[:train_size]
     num_epochs = 100
@@ -294,29 +368,16 @@ if __name__ == '__main__':
             image_batch = bowl.utils.from_numpy(image_batch.astype(np.float32))
 
             optimizer.zero_grad()
-            logits, deltas = net(image_batch)
+            rpn_logits, rpn_deltas, rcnn_logits, rcnn_deltas, rcnn_boxes, rcnn_masks, rcnn_image_ids = net(image_batch)
             anchors = net.backbone.generate_anchors()
 
-            loss = rpn_classifier_loss(gt_boxes_batch, logits, anchors)
-            loss += rpn_regressor_loss(gt_boxes_batch, deltas, anchors)
+            loss = compute_loss(rpn_logits, rpn_deltas, rcnn_logits, rcnn_deltas, rcnn_boxes, rcnn_masks, rcnn_image_ids, anchors, gt_boxes_batch, gt_masks_batch)
             loss.backward()
             optimizer.step()
             training_loss += loss.data[0] / num_batches
 
-        logits, deltas = net(validation_images)
-        anchors = net.backbone.generate_anchors()
-
-        display_predictions(
-            validation_images[0],
-            logits[0],
-            deltas[0],
-            anchors,
-            validation_gt_boxes[0],
-            validation_gt_masks[0],
-        )
-
-        validation_loss = rpn_classifier_loss(validation_gt_boxes, logits, anchors)
-        validation_loss += rpn_regressor_loss(validation_gt_boxes, deltas, anchors)
+        rpn_logits, rpn_deltas, rcnn_logits, rcnn_deltas, rcnn_boxes, rcnn_masks, rcnn_image_ids = net(validation_images)
+        validation_loss = compute_loss(rpn_logits, rpn_deltas, rcnn_logits, rcnn_deltas, rcnn_boxes, rcnn_masks, rcnn_image_ids, anchors, validation_gt_boxes, validation_gt_masks)
         validation_loss = validation_loss.data[0]
         reduce_lr.step(validation_loss)
 
