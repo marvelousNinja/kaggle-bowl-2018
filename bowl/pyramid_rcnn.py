@@ -180,7 +180,7 @@ class MaskRCNN(torch.nn.Module):
     def __init__(self, num_scales, anchors_per_location):
         super(MaskRCNN, self).__init__()
         self.backbone = ResNetBackbone()
-        self.rpns = [RPN(input_channels=256, anchors_per_location=anchors_per_location) for i in range(num_scales)]
+        self.rpns = [bowl.utils.as_cuda(RPN(input_channels=256, anchors_per_location=anchors_per_location)) for i in range(num_scales)]
         self.rcnn = RCNN(input_size=7 * 7 * 256, num_classes=2)
         self.mask_head = MaskHead(input_channels=256)
 
