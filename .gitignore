@@ -48,7 +48,6 @@ logdir
 .env
 *.hdf5
 data/*
-/osm
 
 *.so
 *.o
