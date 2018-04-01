@@ -22,3 +22,13 @@ class RPN(torch.nn.Module):
         torch.nn.init.normal(layer.weight.data, mean, std)
         layer.weight.bias = 0
         return layer
+
+class MultiRPN(torch.nn.Module):
+    def __init__(self, input_channels, anchors_per_location, num_scales):
+        super(MultiRPN, self).__init__()
+        self.rpns = [RPN(input_channels, anchors_per_location) for i in range(num_scales)]
+
+    def forward(self, x):
+        outputs = [rpn(scale_maps) for (scale_maps, rpn) in zip(x, self.rpns)]
+        logits, deltas = zip(*outputs)
+        return torch.cat(logits, dim=1), torch.cat(deltas, dim=1)
