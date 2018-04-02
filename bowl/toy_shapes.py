@@ -4,10 +4,10 @@ from PIL import Image, ImageDraw
 from bowl.utils import normalize
 
 def random_bbox_in(shape):
-    x0 = np.random.randint(shape[0])
-    y0 = np.random.randint(shape[1])
-    width = np.random.randint(16, int(shape[0] / 5))
-    height = np.random.randint(16, int(shape[1] / 5))
+    x0 = np.random.randint(shape[1])
+    y0 = np.random.randint(shape[0])
+    width = np.random.randint(16, int(shape[1] / 5))
+    height = np.random.randint(16, int(shape[0] / 5))
     x1, y1 = x0 + width, y0 + height
     return [x0, y0, x1, y1]
 
@@ -21,7 +21,7 @@ def range_overlap(a_min, a_max, b_min, b_max):
     return (a_min <= b_max) and (b_min <= a_max)
 
 def generate_segmentation_image(shape):
-    image = Image.new('RGB', shape, 0)
+    image = Image.new('RGB', shape[::-1], 0)
     bboxes = []
     masks = []
     draw = ImageDraw.Draw(image)
@@ -31,7 +31,7 @@ def generate_segmentation_image(shape):
 
     while tries <= max_tries:
         tries += 1
-        mask = Image.new('L', shape, 0)
+        mask = Image.new('L', shape[::-1], 0)
         mask_draw = ImageDraw.Draw(mask)
         bbox = random_bbox_in(shape)
 
@@ -56,13 +56,13 @@ def generate_segmentation_image(shape):
 
     return np.array(image), np.array(bboxes), np.array(list(map(np.array, masks))) / 255
 
-def generate_segmentation_batch(size):
+def generate_segmentation_batch(size, shape=(224, 224)):
     images = []
     gt_boxes = []
     masks = []
 
     for _ in range(size):
-        image, bboxes, image_masks = generate_segmentation_image((224, 224))
+        image, bboxes, image_masks = generate_segmentation_image(shape)
         image = np.moveaxis(image, 2, 0)
         images.append(image)
         gt_boxes.append(bboxes)
