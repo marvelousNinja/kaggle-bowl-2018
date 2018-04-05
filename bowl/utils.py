@@ -5,12 +5,16 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import torch
 from torch.autograd import Variable
+from nms.pth_nms import pth_nms
+
+def non_max_suppression(boxes, scores, iou_threshold):
+    return pth_nms(torch.cat((boxes, scores), dim=1).data, iou_threshold)
 
 def normalize(image_batch):
     image_batch = image_batch.astype(np.float32)
     image_batch /= 255
-    mean = [0.08734627, 0.08734627, 0.08734627]
-    std = [0.28179365, 0.28179365, 0.28179365]
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
     image_batch[:, 0, :, :] -= mean[0]
     image_batch[:, 1, :, :] -= mean[1]
     image_batch[:, 2, :, :] -= mean[2]
