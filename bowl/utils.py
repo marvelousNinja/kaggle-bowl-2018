@@ -1,3 +1,5 @@
+from itertools import product
+
 import numpy as np
 import matplotlib
 matplotlib.use('TkAgg')
@@ -6,6 +8,25 @@ import matplotlib.patches as patches
 import torch
 from torch.autograd import Variable
 from nms.pth_nms import pth_nms
+
+def generate_anchors(stride, scales, ratios, image_shape):
+    max_y_shift = image_shape[0] // stride
+    max_x_shift = image_shape[1] // stride
+
+    anchors = []
+    for y_shift, x_shift, scale, ratio in product(range(max_y_shift), range(max_x_shift), scales, ratios):
+        x_center = stride / 2 + x_shift * stride - 1
+        y_center = stride / 2 + y_shift * stride - 1
+        width = scale * ratio
+        height = scale / ratio
+        anchors.append((
+            x_center - width / 2,
+            y_center - height / 2,
+            x_center + width / 2,
+            y_center + height / 2
+        ))
+
+    return np.array(anchors, dtype=np.float32)
 
 def non_max_suppression(boxes, scores, iou_threshold):
     return pth_nms(torch.cat((boxes, scores), dim=1).data, iou_threshold)

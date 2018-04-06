@@ -31,13 +31,13 @@ class ResnetBackbone(torch.nn.Module):
 
         x = self.cnn.layer1(x)
         x = self.cnn.layer2(x)
-        x = self.cnn.layer3(x)
+        # x = self.cnn.layer3(x)
         # x = self.cnn.layer4(x)
 
         return x
 
     def output_channels(self):
-        return 256
+        return 128
 
     def stride(self):
-        return 16
+        return 8

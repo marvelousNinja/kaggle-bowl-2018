@@ -1,4 +1,3 @@
-from itertools import product
 from functools import partial
 
 from fire import Fire
@@ -18,6 +17,7 @@ from bowl.utils import construct_boxes
 from bowl.utils import from_numpy
 from bowl.utils import to_numpy
 from bowl.utils import non_max_suppression
+from bowl.utils import generate_anchors
 from bowl.toy_shapes import generate_segmentation_batch
 from roi_align.crop_and_resize import CropAndResizeFunction
 
@@ -30,68 +30,84 @@ class FasterRCNN(torch.nn.Module):
         self.rcnn = RoIHead(self.roi_shape, num_classes=1)
         self.generate_anchors = partial(generate_anchors, self.backbone.stride(), scales, ratios)
 
-    def forward(self, _x):
-        image_shape = _x.shape[2:]
-        x = self.backbone(_x)
-        logits, deltas = self.rpn(x)
+    def forward(self, x):
+        image_shape = x.shape[2:]
+        anchors = self.generate_anchors(image_shape)
+        x = self.backbone(x)
+        rpn_logits, rpn_deltas = self.rpn(x)
 
         # NMS block
-        anchors = self.generate_anchors(image_shape)
+        # 1. Convert to numpy and to bboxes
+        scores = softmax(rpn_logits[0], dim=1)[:, [1]]
+        boxes = construct_boxes(to_numpy(rpn_deltas[0]), anchors)
 
-        scores = softmax(logits[0], dim=1)[:, [1]]
-        boxes = construct_boxes(to_numpy(deltas[0]), anchors)
+        # 2. Clip bboxes to image shape
         boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, image_shape[1] - 1)
         boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, image_shape[0] - 1)
-        boxes = from_numpy(boxes)
-        keep = non_max_suppression(boxes, scores, iou_threshold=0.7)
 
-        normalized_boxes = to_numpy(boxes[keep])[:2000].copy()
-        rois = from_numpy(normalized_boxes.copy())
+        # 3. Convert to pytorch and perform actual NMS
+        keep_indicies = non_max_suppression(from_numpy(boxes), scores, iou_threshold=0.5)[:2000]
+        rpn_proposals = boxes[keep_indicies]
+
+        # RoI Heads block
+        # 1. Normalize boxes to 0..1 coordinates
+        normalized_boxes = rpn_proposals.copy()
         normalized_boxes[:, [0, 2]] /= (image_shape[1] - 1)
         normalized_boxes[:, [1, 3]] /= (image_shape[0] - 1)
-        normalized_boxes = from_numpy(normalized_boxes[:, [1, 0, 3, 2]]).detach().contiguous()
-        image_ids = from_numpy(np.repeat(0, len(normalized_boxes)), dtype=np.int32).detach().contiguous()
 
+        # 2. Reorder to y1, x1, y2, x2
+        normalized_boxes = from_numpy(normalized_boxes[:, [1, 0, 3, 2]]).detach().contiguous()
+
+        # 3. Extract feature map crops
+        image_ids = from_numpy(np.repeat(0, len(normalized_boxes)), dtype=np.int32).detach().contiguous()
         cropper = CropAndResizeFunction(self.roi_shape[1], self.roi_shape[2], -1)
         crops = cropper(x, normalized_boxes, image_ids)
-        plt.subplot(211)
-        plt.imshow(np.moveaxis(_x[0].data.numpy(), 0, 2))
-        plt.subplot(212)
-        plt.imshow(np.moveaxis(crops[0][:3].data.numpy(), 0, 2)); plt.pause(1e-7)
         rcnn_logits, rcnn_deltas = self.rcnn(crops)
-        return logits, deltas, keep, scores[keep], rois, rcnn_logits, rcnn_deltas
+
+        # Second NMS block
+        # 1. Convert to numpy and to bboxes
+        rcnn_detection_scores = softmax(rcnn_logits, dim=1)[:, [1]]
+        rcnn_detections = construct_boxes(to_numpy(rcnn_deltas), rpn_proposals)
+
+        # 2. Clip bboxes to image shape
+        rcnn_detections[:, [0, 2]] = np.clip(rcnn_detections[:, [0, 2]], 0, image_shape[1] - 1)
+        rcnn_detections[:, [1, 3]] = np.clip(rcnn_detections[:, [1, 3]], 0, image_shape[0] - 1)
+
+        # 3. Convert to pytorch and perform actual NMS
+        keep_indicies = non_max_suppression(from_numpy(rcnn_detections), rcnn_detection_scores, iou_threshold=0.3)
+        rcnn_detections = rcnn_detections[keep_indicies]
+        rcnn_detection_scores = rcnn_detection_scores[keep_indicies]
+
+        return rpn_logits, rpn_deltas, rpn_proposals, anchors, rcnn_logits, rcnn_deltas, rcnn_detections, rcnn_detection_scores
 
 def fit():
-    scales = [32, 64, 128, 256]
-    ratios = [0.5, 1.0, 2.0]
     backbone = ResnetBackbone()
-    stride = backbone.stride()
-    model = FasterRCNN(backbone, scales, ratios)
+    model = FasterRCNN(backbone, scales=[32], ratios=[1.0])
     optimizer = torch.optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr=0.001)
     step_lr = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10])
 
     num_epochs = 100
     num_batches = 10
 
-    val_images, val_gt_boxes, _ = generate_segmentation_batch(1, (640, 640))
+    val_images, val_gt_boxes, _ = generate_segmentation_batch(1, (224, 224))
     image_shape = val_images[0].shape[1:]
-    val_anchors = generate_anchors(stride, scales, ratios, image_shape)
-    val_true_labels, val_label_weights, val_deltas = generate_rpn_targets(val_anchors, val_gt_boxes[0], image_shape)
+    val_anchors = model.generate_anchors(image_shape)
+    val_true_labels, val_label_weights, val_true_deltas = generate_rpn_targets(val_anchors, val_gt_boxes[0], image_shape)
 
     for _ in tqdm(range(num_epochs)):
         for _ in tqdm(range(num_batches)):
             optimizer.zero_grad()
-            images, gt_boxes, _ = generate_segmentation_batch(1, (640, 640))
-            pred_labels, pred_deltas, keep, _, rois, rcnn_logits, rcnn_deltas = model(from_numpy(images))
+            images, gt_boxes, _ = generate_segmentation_batch(1, (224, 224))
+            # np.sqrt((gt_boxes[0][:, 2] - gt_boxes[0][:, 0]) * (gt_boxes[0][:, 3] - gt_boxes[0][:, 1]))
+            pred_labels, pred_deltas, pred_rpn_proposals, anchors, rcnn_logits, rcnn_deltas, _, _ = model(from_numpy(images))
 
             image_shape = images[0].shape[1:]
-            anchors = generate_anchors(stride, scales, ratios, image_shape)
             true_labels, label_weights, true_deltas = generate_rpn_targets(anchors, gt_boxes[0], image_shape)
-            rcnn_true_labels, rcnn_label_weights, rcnn_true_deltas = generate_rcnn_targets(to_numpy(rois), gt_boxes[0])
 
             cls_loss = cross_entropy(pred_labels[0], from_numpy(true_labels, dtype=np.int64), weight=from_numpy(label_weights), ignore_index=-1)
             reg_loss = smooth_l1_loss(pred_deltas[0][[np.where(true_labels == 1)[0]]], from_numpy(true_deltas[np.where(true_labels == 1)[0]]))
 
+            rcnn_true_labels, rcnn_label_weights, rcnn_true_deltas = generate_rcnn_targets(pred_rpn_proposals, gt_boxes[0])
             rcnn_cls_loss = cross_entropy(rcnn_logits, from_numpy(rcnn_true_labels, dtype=np.int64), weight=from_numpy(rcnn_label_weights), ignore_index=-1)
 
             if len(np.where(rcnn_true_labels == 1)[0]) > 0:
@@ -105,36 +121,11 @@ def fit():
             optimizer.step()
         step_lr.step()
 
-        pred_labels, pred_deltas, keep, scores, _, _, _ = model(from_numpy(val_images))
-        pred_boxes = construct_boxes(to_numpy(pred_deltas[0]), val_anchors)
-        kept_boxes = pred_boxes[keep.numpy()]
-        scores = to_numpy(scores)
-        kept_boxes = kept_boxes[np.where(scores > 0.5)[0]]
-        if len(kept_boxes) > 0:
-            display_boxes(kept_boxes, bg=np.moveaxis(val_images[0], 0, 2))
-
-        loss = cross_entropy(pred_labels[0], from_numpy(val_true_labels, dtype=np.int64), weight=from_numpy(val_label_weights), ignore_index=-1)
-        loss = loss.data[0]
-        tqdm.write(f'val loss - {loss:.5f}')
-
-def generate_anchors(stride, scales, ratios, image_shape):
-    max_y_shift = image_shape[0] // stride
-    max_x_shift = image_shape[1] // stride
-
-    anchors = []
-    for y_shift, x_shift, scale, ratio in product(range(max_y_shift), range(max_x_shift), scales, ratios):
-        x_center = stride / 2 + x_shift * stride - 1
-        y_center = stride / 2 + y_shift * stride - 1
-        width = scale * ratio
-        height = scale / ratio
-        anchors.append((
-            x_center - width / 2,
-            y_center - height / 2,
-            x_center + width / 2,
-            y_center + height / 2
-        ))
-
-    return np.array(anchors, dtype=np.float32)
+        pred_labels, pred_deltas, _, anchors, _, _, detections, detection_scores = model(from_numpy(val_images))
+        cls_loss = cross_entropy(pred_labels[0], from_numpy(val_true_labels, dtype=np.int64), weight=from_numpy(val_label_weights), ignore_index=-1)
+        reg_loss = smooth_l1_loss(pred_deltas[0][[np.where(val_true_labels == 1)[0]]], from_numpy(val_true_deltas[np.where(val_true_labels == 1)[0]]))
+        tqdm.write(f'val cls {cls_loss.data[0]:.5f} - val reg {reg_loss.data[0]:.5f}')
+        display_boxes(detections, to_numpy(detection_scores), np.moveaxis(val_images[0], 0, 2))
 
 def generate_rpn_targets(anchors, gt_boxes, image_shape, batch_size=256, balanced=False, positive_threshold=0.5, negative_threshold=0.3):
     ious = iou(anchors, gt_boxes)
@@ -199,7 +190,7 @@ def sample_batch(labels, batch_size, balanced):
 
     return labels, label_weights
 
-def generate_rcnn_targets(boxes, gt_boxes, batch_size=64, balanced=False, positive_threshold=0.5, min_negative_threshold=0.1):
+def generate_rcnn_targets(boxes, gt_boxes, batch_size=128, balanced=True, positive_threshold=0.5, min_negative_threshold=0.0):
     ious = iou(boxes, gt_boxes)
     # For each box row, find maximum along columns
     gt_indicies = np.argmax(ious, axis=1)
@@ -252,15 +243,19 @@ def sample_rcnn_batch(labels, batch_size, balanced):
 
 import matplotlib.pyplot as plt
 from matplotlib import patches
-def display_boxes(boxes, bg):
+def display_boxes(boxes, scores, bg):
+    positives = np.where(scores > 0.5)[0]
+    boxes = boxes[positives]
     boxes = boxes.astype(np.int32)
     boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, bg.shape[1])
     boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, bg.shape[0])
     plt.cla()
-    plt.imshow((bg + 0.5) * 255)
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    plt.imshow((bg * std + mean) * 255)
     _, ax = plt.gcf(), plt.gca()
     for (x1, y1, x2, y2) in boxes:
-        rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1,linewidth=1,edgecolor='r',facecolor='none')
+        rect = patches.Rectangle((x1, y1), x2 - x1 + 1, y2 - y1 + 1,linewidth=1,edgecolor='r',facecolor='none')
         ax.add_patch(rect)
     plt.pause(1e-7)
 
