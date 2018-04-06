@@ -1,106 +1,118 @@
 from itertools import product
+from functools import partial
 
 from fire import Fire
 import numpy as np
 import torch
-import torchvision
 from torch.nn.functional import cross_entropy
 from torch.nn.functional import smooth_l1_loss
-from torch.nn.functional import binary_cross_entropy_with_logits
+from torch.nn.functional import softmax
 from tqdm import tqdm
 
 from bowl.rpn import RPN
+from bowl.roi_heads import RoIHead
+from bowl.backbones import ResnetBackbone
 from bowl.utils import iou
 from bowl.utils import construct_deltas
+from bowl.utils import construct_boxes
 from bowl.utils import from_numpy
 from bowl.utils import to_numpy
+from bowl.utils import non_max_suppression
 from bowl.toy_shapes import generate_segmentation_batch
-
-class VGGBackbone(torch.nn.Module):
-    def __init__(self):
-        super(VGGBackbone, self).__init__()
-        self.cnn = torchvision.models.vgg16(pretrained=True)
-        self.cnn.features = torch.nn.Sequential(*list(self.cnn.features.children())[:-1])
-        for param in self.cnn.parameters(): param.requires_grad = False
-
-    def forward(self, x):
-        return self.cnn.features(x)
-
-    def output_channels(self):
-        return 512
-
-    def stride(self):
-        return 16
-
-class ResnetBackbone(torch.nn.Module):
-    def __init__(self):
-        super(ResnetBackbone, self).__init__()
-        self.cnn = torchvision.models.resnet18(pretrained=True)
-        for param in self.cnn.parameters(): param.requires_grad = False
-
-    def forward(self, x):
-        x = self.cnn.conv1(x)
-        x = self.cnn.bn1(x)
-        x = self.cnn.relu(x)
-        x = self.cnn.maxpool(x)
-
-        x = self.cnn.layer1(x)
-        x = self.cnn.layer2(x)
-        x = self.cnn.layer3(x)
-        # x = self.cnn.layer4(x)
-
-        return x
-
-    def output_channels(self):
-        return 256
-
-    def stride(self):
-        return 16
+from roi_align.crop_and_resize import CropAndResizeFunction
 
 class FasterRCNN(torch.nn.Module):
-    def __init__(self, backbone, anchors_per_location):
+    def __init__(self, backbone, scales, ratios):
         super(FasterRCNN, self).__init__()
         self.backbone = backbone
-        self.rpn = RPN(input_channels=self.backbone.output_channels(), anchors_per_location=anchors_per_location)
+        self.rpn = RPN(input_channels=self.backbone.output_channels(), anchors_per_location=len(scales) * len(ratios))
+        self.roi_shape = (self.backbone.output_channels(), 7, 7)
+        self.rcnn = RoIHead(self.roi_shape, num_classes=1)
+        self.generate_anchors = partial(generate_anchors, self.backbone.stride(), scales, ratios)
 
-    def forward(self, x):
-        x = self.backbone(x)
+    def forward(self, _x):
+        image_shape = _x.shape[2:]
+        x = self.backbone(_x)
         logits, deltas = self.rpn(x)
-        return logits, deltas
+
+        # NMS block
+        anchors = self.generate_anchors(image_shape)
+
+        scores = softmax(logits[0], dim=1)[:, [1]]
+        boxes = construct_boxes(to_numpy(deltas[0]), anchors)
+        boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, image_shape[1] - 1)
+        boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, image_shape[0] - 1)
+        boxes = from_numpy(boxes)
+        keep = non_max_suppression(boxes, scores, iou_threshold=0.7)
+
+        normalized_boxes = to_numpy(boxes[keep])[:2000].copy()
+        rois = from_numpy(normalized_boxes.copy())
+        normalized_boxes[:, [0, 2]] /= (image_shape[1] - 1)
+        normalized_boxes[:, [1, 3]] /= (image_shape[0] - 1)
+        normalized_boxes = from_numpy(normalized_boxes[:, [1, 0, 3, 2]]).detach().contiguous()
+        image_ids = from_numpy(np.repeat(0, len(normalized_boxes)), dtype=np.int32).detach().contiguous()
+
+        cropper = CropAndResizeFunction(self.roi_shape[1], self.roi_shape[2], -1)
+        crops = cropper(x, normalized_boxes, image_ids)
+        plt.subplot(211)
+        plt.imshow(np.moveaxis(_x[0].data.numpy(), 0, 2))
+        plt.subplot(212)
+        plt.imshow(np.moveaxis(crops[0][:3].data.numpy(), 0, 2)); plt.pause(1e-7)
+        rcnn_logits, rcnn_deltas = self.rcnn(crops)
+        return logits, deltas, keep, scores[keep], rois, rcnn_logits, rcnn_deltas
 
 def fit():
-    scales = [32, 64, 128]
-    ratios = [1.0]
+    scales = [32, 64, 128, 256]
+    ratios = [0.5, 1.0, 2.0]
     backbone = ResnetBackbone()
     stride = backbone.stride()
-    model = FasterRCNN(backbone, anchors_per_location=len(ratios) * len(scales))
+    model = FasterRCNN(backbone, scales, ratios)
     optimizer = torch.optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr=0.001)
-    step_lr = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[14])
+    step_lr = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10])
 
     num_epochs = 100
     num_batches = 10
 
-    val_images, val_gt_boxes, _ = generate_segmentation_batch(1, (224, 256))
+    val_images, val_gt_boxes, _ = generate_segmentation_batch(1, (640, 640))
     image_shape = val_images[0].shape[1:]
     val_anchors = generate_anchors(stride, scales, ratios, image_shape)
-    val_true_labels, val_label_weights, _ = generate_rpn_targets(val_anchors, val_gt_boxes[0], image_shape)
+    val_true_labels, val_label_weights, val_deltas = generate_rpn_targets(val_anchors, val_gt_boxes[0], image_shape)
 
     for _ in tqdm(range(num_epochs)):
         for _ in tqdm(range(num_batches)):
             optimizer.zero_grad()
-            images, gt_boxes, _ = generate_segmentation_batch(1, (224, 256))
+            images, gt_boxes, _ = generate_segmentation_batch(1, (640, 640))
+            pred_labels, pred_deltas, keep, _, rois, rcnn_logits, rcnn_deltas = model(from_numpy(images))
+
             image_shape = images[0].shape[1:]
             anchors = generate_anchors(stride, scales, ratios, image_shape)
-            true_labels, label_weights, _ = generate_rpn_targets(anchors, gt_boxes[0], image_shape)
+            true_labels, label_weights, true_deltas = generate_rpn_targets(anchors, gt_boxes[0], image_shape)
+            rcnn_true_labels, rcnn_label_weights, rcnn_true_deltas = generate_rcnn_targets(to_numpy(rois), gt_boxes[0])
 
-            pred_labels, _ = model(from_numpy(images))
-            loss = cross_entropy(pred_labels[0], from_numpy(true_labels, dtype=np.int64), weight=from_numpy(label_weights), ignore_index=-1)
+            cls_loss = cross_entropy(pred_labels[0], from_numpy(true_labels, dtype=np.int64), weight=from_numpy(label_weights), ignore_index=-1)
+            reg_loss = smooth_l1_loss(pred_deltas[0][[np.where(true_labels == 1)[0]]], from_numpy(true_deltas[np.where(true_labels == 1)[0]]))
 
+            rcnn_cls_loss = cross_entropy(rcnn_logits, from_numpy(rcnn_true_labels, dtype=np.int64), weight=from_numpy(rcnn_label_weights), ignore_index=-1)
+
+            if len(np.where(rcnn_true_labels == 1)[0]) > 0:
+                rcnn_reg_loss = smooth_l1_loss(rcnn_deltas[[np.where(rcnn_true_labels == 1)[0]]], from_numpy(rcnn_true_deltas[np.where(rcnn_true_labels == 1)[0]]))
+            else:
+                rcnn_reg_loss = from_numpy(np.array([0]))
+
+            tqdm.write(f'rpn cls {cls_loss.data[0]:.5f} - rpn reg {reg_loss.data[0]:.5f} - rcnn cls {rcnn_cls_loss.data[0]:.5f} - rcnn reg {rcnn_reg_loss.data[0]:.5f}')
+            loss = cls_loss + reg_loss + rcnn_cls_loss + rcnn_reg_loss
             loss.backward()
             optimizer.step()
         step_lr.step()
 
-        pred_labels, _ = model(from_numpy(val_images))
+        pred_labels, pred_deltas, keep, scores, _, _, _ = model(from_numpy(val_images))
+        pred_boxes = construct_boxes(to_numpy(pred_deltas[0]), val_anchors)
+        kept_boxes = pred_boxes[keep.numpy()]
+        scores = to_numpy(scores)
+        kept_boxes = kept_boxes[np.where(scores > 0.5)[0]]
+        if len(kept_boxes) > 0:
+            display_boxes(kept_boxes, bg=np.moveaxis(val_images[0], 0, 2))
+
         loss = cross_entropy(pred_labels[0], from_numpy(val_true_labels, dtype=np.int64), weight=from_numpy(val_label_weights), ignore_index=-1)
         loss = loss.data[0]
         tqdm.write(f'val loss - {loss:.5f}')
@@ -187,12 +199,65 @@ def sample_batch(labels, batch_size, balanced):
 
     return labels, label_weights
 
+def generate_rcnn_targets(boxes, gt_boxes, batch_size=64, balanced=False, positive_threshold=0.5, min_negative_threshold=0.1):
+    ious = iou(boxes, gt_boxes)
+    # For each box row, find maximum along columns
+    gt_indicies = np.argmax(ious, axis=1)
+
+    # For each box row, actual values of maximum IoU
+    max_iou_per_anchor = ious[range(len(boxes)), gt_indicies]
+
+    # Negative: 0, Positive: 1, Neutral: -1
+    neutral = -1,
+    positive = 1
+    negative = 0
+
+    labels = np.repeat(neutral, len(boxes))
+    labels[(max_iou_per_anchor < positive_threshold) & (max_iou_per_anchor >= min_negative_threshold)] = negative
+    labels[max_iou_per_anchor >= positive_threshold] = positive
+
+    deltas = construct_deltas(gt_boxes[gt_indicies], boxes)
+    labels, label_weights = sample_rcnn_batch(labels, batch_size, balanced)
+    return labels, label_weights, deltas
+
+def sample_rcnn_batch(labels, batch_size, balanced):
+    positives = np.argwhere(labels == 1).reshape(-1)
+    negatives = np.argwhere(labels == 0)[0]
+
+    tqdm.write(f'num positives {len(positives)}')
+
+    allowed_positives = batch_size // 4
+    actual_positives = len(positives)
+    extra_positives = max(0, actual_positives - allowed_positives)
+
+    allowed_negatives = batch_size - (actual_positives - extra_positives)
+    actual_negatives = len(negatives)
+    extra_negatives = max(0, actual_negatives - allowed_negatives)
+
+    if extra_positives > 0:
+        labels[np.random.choice(positives, extra_positives, replace=False)] = -1
+
+    if extra_negatives > 0:
+        labels[np.random.choice(negatives, extra_negatives, replace=False)] = -1
+
+    if balanced:
+        label_weights = np.array([
+            batch_size / (len(np.argwhere(labels == 1).reshape(-1)) + 1),
+            batch_size / len(np.argwhere(labels == 0)[0])
+        ])
+    else:
+        label_weights = np.array([1.0, 1.0])
+
+    return labels, label_weights
+
 import matplotlib.pyplot as plt
 from matplotlib import patches
-def display_boxes(boxes):
-    boxes = np.clip(boxes, 0, 223).astype(np.int32)
+def display_boxes(boxes, bg):
+    boxes = boxes.astype(np.int32)
+    boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, bg.shape[1])
+    boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, bg.shape[0])
     plt.cla()
-    plt.imshow(np.zeros((224, 224)))
+    plt.imshow((bg + 0.5) * 255)
     _, ax = plt.gcf(), plt.gca()
     for (x1, y1, x2, y2) in boxes:
         rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1,linewidth=1,edgecolor='r',facecolor='none')
