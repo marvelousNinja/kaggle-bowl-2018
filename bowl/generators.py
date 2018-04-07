@@ -1,3 +1,5 @@
+from functools import partial
+
 import numpy as np
 
 from bowl.pipelines import get_train_image_ids
@@ -9,9 +11,16 @@ def toy_shapes_generator(image_shape=(224, 224)):
     while True:
         yield generate_segmentation_batch(1, shape=image_shape)
 
-def bowl_generator():
+def bowl_train_generator(image_shape=(224, 224)):
     train_ids = get_train_image_ids()
 
     while True:
         np.random.shuffle(train_ids)
-        yield from map(pipeline, train_ids)
+        yield from map(partial(pipeline, image_shape), train_ids)
+
+def bowl_validation_generator(image_shape=(224, 224)):
+    validation_ids = get_validation_image_ids()
+
+    while True:
+        np.random.shuffle(validation_ids)
+        yield from map(partial(pipeline, image_shape), validation_ids)

@@ -2,11 +2,13 @@ import torch
 import torchvision
 
 class VGGBackbone(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, trainable):
         super(VGGBackbone, self).__init__()
         self.cnn = torchvision.models.vgg16(pretrained=True)
         self.cnn.features = torch.nn.Sequential(*list(self.cnn.features.children())[:-1])
-        for param in self.cnn.parameters(): param.requires_grad = False
+
+        if not trainable:
+            for param in self.cnn.parameters(): param.requires_grad = False
 
     def forward(self, x):
         return self.cnn.features(x)
@@ -18,10 +20,12 @@ class VGGBackbone(torch.nn.Module):
         return 16
 
 class ResnetBackbone(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, trainable):
         super(ResnetBackbone, self).__init__()
         self.cnn = torchvision.models.resnet18(pretrained=True)
-        for param in self.cnn.parameters(): param.requires_grad = False
+
+        if not trainable:
+            for param in self.cnn.parameters(): param.requires_grad = False
 
     def forward(self, x):
         x = self.cnn.conv1(x)

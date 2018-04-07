@@ -9,6 +9,20 @@ import torch
 from torch.autograd import Variable
 from nms.pth_nms import pth_nms
 
+def display_boxes(boxes, scores, bg):
+    positives = np.where(scores > 0.5)[0]
+    boxes = boxes[positives]
+    boxes = boxes.astype(np.int32)
+    boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, bg.shape[1] - 1)
+    boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, bg.shape[0] - 1)
+    plt.cla()
+    plt.imshow(bg)
+    _, ax = plt.gcf(), plt.gca()
+    for (x1, y1, x2, y2) in boxes:
+        rect = patches.Rectangle((x1, y1), x2 - x1 + 1, y2 - y1 + 1,linewidth=1,edgecolor='r',facecolor='none')
+        ax.add_patch(rect)
+    plt.pause(1e-7)
+
 def generate_anchors(stride, scales, ratios, image_shape):
     max_y_shift = image_shape[0] // stride
     max_x_shift = image_shape[1] // stride

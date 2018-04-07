@@ -15,7 +15,7 @@ def get_validation_image_ids():
     return list_dirs_in('./data/train')[:10]
 
 def list_dirs_in(path):
-    dirs = [dir for dir in os.listdir(path) if not dir.startswith('.')]
+    dirs = [dir.name for dir in os.scandir(path) if dir.is_dir() and not dir.name.startswith('.')]
     return np.sort(dirs)
 
 def list_images_in(path):
@@ -41,7 +41,6 @@ def read_image_by_id_cached(image_id, cache={}):
         cache[image_id] = (image, masks)
 
     return image, masks
-
 
 def mask_to_bounding_box(mask):
     a = np.where(mask != 0)
@@ -88,9 +87,15 @@ def generate_random_rotator():
     times = np.random.randint(4)
     return partial(rotate90, times)
 
-def pipeline(image_id):
+def pipeline(image_shape, image_id):
     image, masks = read_image_by_id_cached(image_id)
-    cropper = generate_random_cropper(224, 224, image.shape[0], image.shape[1])
+    image = resize(image_shape + 16, image_shape + 16, image)
+    masks = resize(image_shape + 16, image_shape + 16, masks)
+
+    if len(masks.shape) == 2:
+        masks = masks[:, :, None]
+
+    cropper = generate_random_cropper(image_shape, image_shape, image.shape[0], image.shape[1])
     rotator = generate_random_rotator()
     image = cropper(image)
     image = rotator(image)
@@ -106,8 +111,8 @@ def pipeline(image_id):
 
     if len(bboxes) == 0:
         # TODO AS: Oh so dumb...
-        return pipeline(image_id)
-    return image, bboxes, masks
+        return pipeline(image_shape, image_id)
+    return image[None, :], bboxes[None, :], masks[None, :]
 
 if __name__ == '__main__':
     import pdb; pdb.set_trace()
