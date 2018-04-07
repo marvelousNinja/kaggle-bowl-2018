@@ -8,9 +8,10 @@ from torch.nn.functional import smooth_l1_loss
 from torch.nn.functional import softmax
 from tqdm import tqdm
 
-from bowl.rpn import RPN
-from bowl.roi_heads import RoIHead
 from bowl.backbones import ResnetBackbone
+from bowl.rpns import RPN
+from bowl.roi_heads import RoIHead
+from bowl.toy_shapes import generate_segmentation_batch
 from bowl.utils import iou
 from bowl.utils import construct_deltas
 from bowl.utils import construct_boxes
@@ -18,7 +19,6 @@ from bowl.utils import from_numpy
 from bowl.utils import to_numpy
 from bowl.utils import non_max_suppression
 from bowl.utils import generate_anchors
-from bowl.toy_shapes import generate_segmentation_batch
 from roi_align.crop_and_resize import CropAndResizeFunction
 
 class FasterRCNN(torch.nn.Module):
@@ -82,14 +82,14 @@ class FasterRCNN(torch.nn.Module):
 
 def fit():
     backbone = ResnetBackbone()
-    model = FasterRCNN(backbone, scales=[32], ratios=[1.0])
+    model = FasterRCNN(backbone, scales=[16, 32, 64, 96], ratios=[1.0])
     optimizer = torch.optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr=0.001)
     step_lr = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10])
 
     num_epochs = 100
     num_batches = 10
 
-    val_images, val_gt_boxes, _ = generate_segmentation_batch(1, (224, 224))
+    val_images, val_gt_boxes, _ = generate_segmentation_batch(1, (448, 448))
     image_shape = val_images[0].shape[1:]
     val_anchors = model.generate_anchors(image_shape)
     val_true_labels, val_label_weights, val_true_deltas = generate_rpn_targets(val_anchors, val_gt_boxes[0], image_shape)
@@ -97,8 +97,7 @@ def fit():
     for _ in tqdm(range(num_epochs)):
         for _ in tqdm(range(num_batches)):
             optimizer.zero_grad()
-            images, gt_boxes, _ = generate_segmentation_batch(1, (224, 224))
-            # np.sqrt((gt_boxes[0][:, 2] - gt_boxes[0][:, 0]) * (gt_boxes[0][:, 3] - gt_boxes[0][:, 1]))
+            images, gt_boxes, _ = generate_segmentation_batch(1, (448, 448))
             pred_labels, pred_deltas, pred_rpn_proposals, anchors, rcnn_logits, rcnn_deltas, _, _ = model(from_numpy(images))
 
             image_shape = images[0].shape[1:]
@@ -115,7 +114,8 @@ def fit():
             else:
                 rcnn_reg_loss = from_numpy(np.array([0]))
 
-            tqdm.write(f'rpn cls {cls_loss.data[0]:.5f} - rpn reg {reg_loss.data[0]:.5f} - rcnn cls {rcnn_cls_loss.data[0]:.5f} - rcnn reg {rcnn_reg_loss.data[0]:.5f}')
+            # TODO AS: Accumulate
+            # tqdm.write(f'rpn cls {cls_loss.data[0]:.5f} - rpn reg {reg_loss.data[0]:.5f} - rcnn cls {rcnn_cls_loss.data[0]:.5f} - rcnn reg {rcnn_reg_loss.data[0]:.5f}')
             loss = cls_loss + reg_loss + rcnn_cls_loss + rcnn_reg_loss
             loss.backward()
             optimizer.step()
@@ -163,8 +163,8 @@ def generate_rpn_targets(anchors, gt_boxes, image_shape, batch_size=256, balance
     return labels, label_weights, deltas
 
 def sample_batch(labels, batch_size, balanced):
-    positives = np.argwhere(labels == 1)[0]
-    negatives = np.argwhere(labels == 0)[0]
+    positives = np.argwhere(labels == 1).reshape(-1)
+    negatives = np.argwhere(labels == 0).reshape(-1)
 
     allowed_positives = batch_size // 2
     actual_positives = len(positives)
@@ -182,15 +182,15 @@ def sample_batch(labels, batch_size, balanced):
 
     if balanced:
         label_weights = np.array([
-            batch_size / len(np.argwhere(labels == 1)[0]),
-            batch_size / len(np.argwhere(labels == 0)[0])
+            batch_size / len(np.argwhere(labels == 1).reshape(-1)),
+            batch_size / len(np.argwhere(labels == 0).reshape(-1))
         ])
     else:
         label_weights = np.array([1.0, 1.0])
 
     return labels, label_weights
 
-def generate_rcnn_targets(boxes, gt_boxes, batch_size=128, balanced=True, positive_threshold=0.5, min_negative_threshold=0.0):
+def generate_rcnn_targets(boxes, gt_boxes, batch_size=128, balanced=False, positive_threshold=0.5, min_negative_threshold=0.0):
     ious = iou(boxes, gt_boxes)
     # For each box row, find maximum along columns
     gt_indicies = np.argmax(ious, axis=1)
@@ -213,9 +213,7 @@ def generate_rcnn_targets(boxes, gt_boxes, batch_size=128, balanced=True, positi
 
 def sample_rcnn_batch(labels, batch_size, balanced):
     positives = np.argwhere(labels == 1).reshape(-1)
-    negatives = np.argwhere(labels == 0)[0]
-
-    tqdm.write(f'num positives {len(positives)}')
+    negatives = np.argwhere(labels == 0).reshape(-1)
 
     allowed_positives = batch_size // 4
     actual_positives = len(positives)
@@ -234,7 +232,7 @@ def sample_rcnn_batch(labels, batch_size, balanced):
     if balanced:
         label_weights = np.array([
             batch_size / (len(np.argwhere(labels == 1).reshape(-1)) + 1),
-            batch_size / len(np.argwhere(labels == 0)[0])
+            batch_size / len(np.argwhere(labels == 0).reshape(-1))
         ])
     else:
         label_weights = np.array([1.0, 1.0])
@@ -247,8 +245,8 @@ def display_boxes(boxes, scores, bg):
     positives = np.where(scores > 0.5)[0]
     boxes = boxes[positives]
     boxes = boxes.astype(np.int32)
-    boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, bg.shape[1])
-    boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, bg.shape[0])
+    boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, bg.shape[1] - 1)
+    boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, bg.shape[0] - 1)
     plt.cla()
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
