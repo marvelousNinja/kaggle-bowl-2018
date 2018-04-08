@@ -15,6 +15,7 @@ from bowl.generators import bowl_train_generator
 from bowl.generators import bowl_validation_generator
 from bowl.rpns import RPN
 from bowl.roi_heads import RoIHead
+from bowl.utils import as_cuda
 from bowl.utils import iou
 from bowl.utils import construct_deltas
 from bowl.utils import construct_boxes
@@ -95,7 +96,7 @@ def fit(
     else:
         backbone = VGGBackbone(trainable_backbone)
 
-    model = FasterRCNN(backbone, scales, ratios)
+    model = as_cuda(FasterRCNN(backbone, scales, ratios))
     optimizer = torch.optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr)
     reduce_lr = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=5)
 
