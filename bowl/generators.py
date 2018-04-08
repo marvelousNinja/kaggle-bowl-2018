@@ -18,7 +18,7 @@ def bowl_train_generator(image_shape=(224, 224)):
 
     while True:
         np.random.shuffle(train_ids)
-        yield from pool.map(partial(pipeline, image_shape), train_ids)
+        yield from pool.imap(partial(pipeline, image_shape), train_ids)
 
 def bowl_validation_generator(image_shape=(224, 224)):
     validation_ids = get_validation_image_ids()

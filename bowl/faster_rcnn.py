@@ -122,6 +122,7 @@ def fit(
         outputs = model(from_numpy(val_images))
         losses = compute_loss(*outputs[:-2], val_images.shape[2:], val_gt_boxes)
         print_losses(losses)
+        tqdm.write(str(mean_average_precision(outputs, val_gt_boxes)))
         loss = sum(losses)
         reduce_lr.step(loss.data[0])
 
@@ -129,6 +130,45 @@ def print_losses(losses):
     rpn_cls, rpn_reg, rcnn_cls, rcnn_reg = map(lambda loss: loss.data[0], losses)
     total = rpn_cls + rpn_reg + rcnn_cls + rcnn_reg
     tqdm.write(f'total {total:.5f} - rpn cls {rpn_cls:.5f} - rpn reg {rpn_reg:.5f} - rcnn cls {rcnn_cls:.5f} - rcnn reg {rcnn_reg:.5f}')
+
+def mean_average_precision(outputs, gt_boxes):
+    detections = outputs[-2]
+    scores = to_numpy(outputs[-1].view(-1))
+    detections = detections[scores > 0.5]
+    gt_boxes = gt_boxes[0]
+
+    ious = iou(detections, gt_boxes)
+
+    num_positives = 0
+    num_negatives = 0
+
+    for threshold in np.arange(0.5, 1, 0.05):
+        ious = iou(detections, gt_boxes)
+
+        while True:
+            if ious.shape[0] == 0:
+                num_negatives += ious.shape[1]
+                break
+
+            if ious.shape[1] == 0:
+                num_negatives += ious.shape[0]
+                break
+
+            max_iou_per_detection = np.max(ious, axis=1)
+            top_detection = np.argmax(max_iou_per_detection)
+            top_box = np.argmax(ious[top_detection])
+            max_iou = max_iou_per_detection[top_detection]
+
+            if max_iou > threshold:
+                num_positives += 1
+            else:
+                num_negatives += 1
+
+            ious = np.delete(ious, top_detection, axis=0)
+            ious = np.delete(ious, top_box, axis=1)
+
+    value = num_positives / (num_positives + num_negatives)
+    return value
 
 def compute_loss(rpn_logits, rpn_deltas, rpn_proposals, anchors, rcnn_logits, rcnn_deltas, image_shape, gt_boxes):
     rpn_true_labels, rpn_label_weights, rpn_true_deltas = generate_rpn_targets(anchors, gt_boxes[0], image_shape)
