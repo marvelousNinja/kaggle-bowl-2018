@@ -97,7 +97,7 @@ def fit(
 
     model = FasterRCNN(backbone, scales, ratios)
     optimizer = torch.optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr)
-    reduce_lr = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+    reduce_lr = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=5)
 
     if dataset == 'toy':
         train_generator = toy_shapes_generator(image_shape)
@@ -120,9 +120,14 @@ def fit(
 
         outputs = model(from_numpy(val_images))
         losses = compute_loss(*outputs[:-2], val_images.shape[2:], val_gt_boxes)
+        print_losses(losses)
         loss = sum(losses)
         reduce_lr.step(loss.data[0])
-        tqdm.write(f'val loss {loss.data[0]:.5f}')
+
+def print_losses(losses):
+    rpn_cls, rpn_reg, rcnn_cls, rcnn_reg = map(lambda loss: loss.data[0], losses)
+    total = rpn_cls + rpn_reg + rcnn_cls + rcnn_reg
+    tqdm.write(f'total {total:.5f} - rpn cls {rpn_cls:.5f} - rpn reg {rpn_reg:.5f} - rcnn cls {rcnn_cls:.5f} - rcnn reg {rcnn_reg:.5f}')
 
 def compute_loss(rpn_logits, rpn_deltas, rpn_proposals, anchors, rcnn_logits, rcnn_deltas, image_shape, gt_boxes):
     rpn_true_labels, rpn_label_weights, rpn_true_deltas = generate_rpn_targets(anchors, gt_boxes[0], image_shape)
