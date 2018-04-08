@@ -1,3 +1,4 @@
+from multiprocessing.pool import ThreadPool
 from functools import partial
 
 import numpy as np
@@ -12,11 +13,12 @@ def toy_shapes_generator(image_shape=(224, 224)):
         yield generate_segmentation_batch(1, shape=image_shape)
 
 def bowl_train_generator(image_shape=(224, 224)):
+    pool = ThreadPool()
     train_ids = get_train_image_ids()
 
     while True:
         np.random.shuffle(train_ids)
-        yield from map(partial(pipeline, image_shape), train_ids)
+        yield from pool.map(partial(pipeline, image_shape), train_ids)
 
 def bowl_validation_generator(image_shape=(224, 224)):
     validation_ids = get_validation_image_ids()
