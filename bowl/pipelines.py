@@ -89,13 +89,13 @@ def generate_random_rotator():
 
 def pipeline(image_shape, image_id):
     image, masks = read_image_by_id_cached(image_id)
-    image = resize(image_shape + 16, image_shape + 16, image)
-    masks = resize(image_shape + 16, image_shape + 16, masks)
+    image = resize(image_shape[1] + 16, image_shape[0] + 16, image)
+    masks = resize(image_shape[1] + 16, image_shape[0] + 16, masks)
 
     if len(masks.shape) == 2:
         masks = masks[:, :, None]
 
-    cropper = generate_random_cropper(image_shape, image_shape, image.shape[0], image.shape[1])
+    cropper = generate_random_cropper(image_shape[0], image_shape[1], image_shape[0] + 16, image_shape[1] + 16)
     rotator = generate_random_rotator()
     image = cropper(image)
     image = rotator(image)
