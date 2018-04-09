@@ -4,11 +4,11 @@ from PIL import Image, ImageDraw
 from bowl.utils import normalize
 
 def random_bbox_in(shape):
-    x0 = np.random.randint(shape[1])
-    y0 = np.random.randint(shape[0])
     width = np.random.randint(16, int(shape[1] / 5))
     height = np.random.randint(16, int(shape[0] / 5))
-    x1, y1 = x0 + width, y0 + height
+    x0 = np.random.randint(shape[1] - width)
+    y0 = np.random.randint(shape[0] - height)
+    x1, y1 = x0 + width - 1, y0 + height - 1
     return [x0, y0, x1, y1]
 
 def intersects_with_any(bbox, other_bboxes):

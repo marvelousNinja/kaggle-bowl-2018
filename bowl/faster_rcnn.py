@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from torch.nn.functional import cross_entropy
 from torch.nn.functional import smooth_l1_loss
+from torch.nn.functional import l1_loss
 from torch.nn.functional import softmax
 from tqdm import tqdm
 
@@ -65,8 +66,9 @@ class FasterRCNN(torch.nn.Module):
 
         # 3. Extract feature map crops
         image_ids = from_numpy(np.repeat(0, len(normalized_boxes)), dtype=np.int32).detach().contiguous()
-        cropper = CropAndResizeFunction(self.roi_shape[1], self.roi_shape[2], -1)
+        cropper = CropAndResizeFunction(self.roi_shape[1] * 2, self.roi_shape[2] * 2, 0)
         crops = cropper(x, normalized_boxes, image_ids)
+        crops = torch.nn.functional.max_pool2d(crops, kernel_size=2)
         rcnn_logits, rcnn_deltas = self.rcnn(crops)
 
         # Second NMS block
@@ -88,7 +90,8 @@ class FasterRCNN(torch.nn.Module):
 def fit(
         scales=[32], image_shape=(224, 224), ratios=[1.0],
         trainable_backbone=False, lr=0.001, dataset='toy',
-        num_epochs=10, num_batches=10, backbone='resnet'
+        num_epochs=10, num_batches=10, backbone='resnet',
+        visualize=False
         ):
 
     if backbone == 'resnet':
@@ -124,7 +127,8 @@ def fit(
         print_losses(losses)
         tqdm.write(str(mean_average_precision(outputs, val_gt_boxes)))
         loss = sum(losses)
-        reduce_lr.step(loss.data[0])
+        #reduce_lr.step(loss.data[0])
+        if visualize: display_boxes(outputs[-2], to_numpy(outputs[-1]), np.moveaxis(val_images[0], 0, 2))
 
 def print_losses(losses):
     rpn_cls, rpn_reg, rcnn_cls, rcnn_reg = map(lambda loss: loss.data[0], losses)
@@ -134,7 +138,7 @@ def print_losses(losses):
 def mean_average_precision(outputs, gt_boxes):
     detections = outputs[-2]
     scores = to_numpy(outputs[-1].view(-1))
-    detections = detections[scores > 0.5]
+    detections = detections[scores > 0.7]
     gt_boxes = gt_boxes[0]
 
     ious = iou(detections, gt_boxes)
@@ -175,7 +179,7 @@ def compute_loss(rpn_logits, rpn_deltas, rpn_proposals, anchors, rcnn_logits, rc
     rpn_cls_loss = cross_entropy(rpn_logits[0], rpn_true_labels, rpn_label_weights, ignore_index=-1)
     positive = (rpn_true_labels == 1).nonzero().view(-1)
     if len(positive) > 0:
-        rpn_reg_loss = smooth_l1_loss(rpn_deltas[0][positive], rpn_true_deltas[positive])
+        rpn_reg_loss = l1_loss(rpn_deltas[0][positive], rpn_true_deltas[positive])
     else:
         rpn_reg_loss = from_numpy(np.array([0]))
 
@@ -183,7 +187,7 @@ def compute_loss(rpn_logits, rpn_deltas, rpn_proposals, anchors, rcnn_logits, rc
     rcnn_cls_loss = cross_entropy(rcnn_logits, rcnn_true_labels, rcnn_label_weights, ignore_index=-1)
     positive = (rcnn_true_labels == 1).nonzero().view(-1)
     if len(positive) > 0:
-        rcnn_reg_loss = smooth_l1_loss(rcnn_deltas[positive], rcnn_true_deltas[positive])
+        rcnn_reg_loss = l1_loss(rcnn_deltas[positive], rcnn_true_deltas[positive])
     else:
         rcnn_reg_loss = from_numpy(np.array([0]))
 
@@ -252,7 +256,7 @@ def sample_batch(labels, batch_size, balanced):
 
     return labels, label_weights
 
-def generate_rcnn_targets(boxes, gt_boxes, batch_size=128, balanced=False, positive_threshold=0.5, min_negative_threshold=0.0):
+def generate_rcnn_targets(boxes, gt_boxes, batch_size=64, balanced=False, positive_threshold=0.5, min_negative_threshold=0.0):
     ious = iou(boxes, gt_boxes)
     # For each box row, find maximum along columns
     gt_indicies = np.argmax(ious, axis=1)

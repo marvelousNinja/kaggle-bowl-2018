@@ -109,6 +109,11 @@ def pipeline(image_shape, image_id):
     masks = masks[np.nonzero(np.max(masks, axis=(1, 2)))]
     bboxes = np.array(list(map(mask_to_bounding_box, masks)))
 
+    # TODO AS: Do we really need it?
+    areas = (bboxes[:, 2] - bboxes[:, 0] + 1) * (bboxes[:, 3] - bboxes[:, 1] + 1)
+    bboxes = bboxes[np.sqrt(areas) > 8]
+    masks = masks[np.sqrt(areas) > 8]
+
     if len(bboxes) == 0:
         # TODO AS: Oh so dumb...
         return pipeline(image_shape, image_id)

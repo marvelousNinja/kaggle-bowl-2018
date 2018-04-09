@@ -10,7 +10,7 @@ from torch.autograd import Variable
 from nms.pth_nms import pth_nms
 
 def display_boxes(boxes, scores, bg):
-    positives = np.where(scores > 0.5)[0]
+    positives = np.where(scores > 0.7)[0]
     boxes = boxes[positives]
     boxes = boxes.astype(np.int32)
     boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, bg.shape[1] - 1)
@@ -34,12 +34,11 @@ def generate_anchors(stride, scales, ratios, image_shape):
         width = scale * ratio
         height = scale / ratio
         anchors.append((
-            x_center - width / 2,
-            y_center - height / 2,
-            x_center + width / 2,
-            y_center + height / 2
+            x_center - (width - 1) * 0.5,
+            y_center - (height - 1) * 0.5,
+            x_center + (width - 1) * 0.5,
+            y_center + (height - 1) * 0.5
         ))
-
     return np.array(anchors, dtype=np.float32)
 
 def non_max_suppression(boxes, scores, iou_threshold):
