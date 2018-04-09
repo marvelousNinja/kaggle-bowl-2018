@@ -10,6 +10,9 @@ from torch.autograd import Variable
 from nms.pth_nms import pth_nms
 
 def display_boxes(boxes, scores, bg):
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    bg = (((bg * std) + mean) * 255).astype(np.uint)
     positives = np.where(scores > 0.7)[0]
     boxes = boxes[positives]
     boxes = boxes.astype(np.int32)

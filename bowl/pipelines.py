@@ -58,15 +58,10 @@ def channels_last(image):
 def normalize(image):
     image = image.astype(np.float32)
     image /= 255
-    image = image[::-1, :, :]
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
-    image[:, :, 0] -= mean[0]
-    image[:, :, 1] -= mean[1]
-    image[:, :, 2] -= mean[2]
-    image[:, :, 0] /= std[0]
-    image[:, :, 1] /= std[1]
-    image[:, :, 2] /= std[2]
+    image -= mean
+    image /= std
     return image
 
 def non_empty(masks):
@@ -99,8 +94,8 @@ def pipeline(image_shape, image_id):
     rotator = generate_random_rotator()
     image = cropper(image)
     image = rotator(image)
-    image = channels_first(image)
     image = normalize(image)
+    image = channels_first(image)
 
     masks = cropper(masks)
     masks = rotator(masks)
@@ -108,11 +103,6 @@ def pipeline(image_shape, image_id):
     masks = non_empty(masks)
     masks = masks[np.nonzero(np.max(masks, axis=(1, 2)))]
     bboxes = np.array(list(map(mask_to_bounding_box, masks)))
-
-    # TODO AS: Do we really need it?
-    areas = (bboxes[:, 2] - bboxes[:, 0] + 1) * (bboxes[:, 3] - bboxes[:, 1] + 1)
-    bboxes = bboxes[np.sqrt(areas) > 8]
-    masks = masks[np.sqrt(areas) > 8]
 
     if len(bboxes) == 0:
         # TODO AS: Oh so dumb...
