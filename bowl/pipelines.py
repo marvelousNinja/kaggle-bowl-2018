@@ -65,7 +65,8 @@ def normalize(image):
     return image
 
 def non_empty(masks):
-    return masks[np.nonzero(np.max(masks, axis=(1, 2)))]
+    masks = masks[np.nonzero(np.max(masks, axis=(1, 2)))]
+    return masks[np.sqrt(np.sum(masks, axis=(1, 2))) > 4]
 
 def crop(top, left, height, width, image):
     return image[top:top + height, left:left+width]

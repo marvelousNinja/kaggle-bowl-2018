@@ -37,10 +37,10 @@ def generate_anchors(stride, scales, ratios, image_shape):
         width = scale * ratio
         height = scale / ratio
         anchors.append((
-            x_center - (width - 1) * 0.5,
-            y_center - (height - 1) * 0.5,
-            x_center + (width - 1) * 0.5,
-            y_center + (height - 1) * 0.5
+            x_center - width * 0.5 + 1,
+            y_center - height * 0.5 + 1,
+            x_center + width * 0.5,
+            y_center + height * 0.5
         ))
     return np.array(anchors, dtype=np.float32)
 
@@ -137,9 +137,9 @@ def generate_anchor_grid(base, scales, ratios, grid_shape):
 def iou(bboxes_a, bboxes_b):
     tl = np.maximum(bboxes_a[:, None, :2], bboxes_b[:, :2])
     br = np.minimum(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-    area_i = np.prod(br - tl, axis=2) * (tl < br).all(axis=2)
-    area_a = np.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], axis=1)
-    area_b = np.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], axis=1)
+    area_i = np.prod(br - tl + 1, axis=2) * (tl <= br).all(axis=2)
+    area_a = np.prod(bboxes_a[:, 2:] - bboxes_a[:, :2] + 1, axis=1)
+    area_b = np.prod(bboxes_b[:, 2:] - bboxes_b[:, :2] + 1, axis=1)
     return area_i / (area_a[:, None] + area_b - area_i)
 
 def display_image_and_boxes(image, boxes, masks=None, gt_boxes=None, gt_masks=None):

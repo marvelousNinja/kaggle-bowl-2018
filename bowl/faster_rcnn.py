@@ -94,6 +94,8 @@ def fit(
         visualize=False
         ):
 
+    np.random.seed(1991)
+
     if backbone == 'resnet':
         backbone = ResnetBackbone(trainable_backbone)
     else:
@@ -122,7 +124,7 @@ def fit(
             loss.backward()
             optimizer.step()
 
-        outputs = model(from_numpy(val_images))
+        outputs = model.eval()(from_numpy(val_images))
         losses = compute_loss(*outputs[:-2], val_images.shape[2:], val_gt_boxes)
         print_losses(losses)
         tqdm.write(str(mean_average_precision(outputs, val_gt_boxes)))
@@ -203,7 +205,10 @@ def generate_rpn_targets(anchors, gt_boxes, image_shape, batch_size=256, balance
 
     # For each gt box, anchor with the highest IoU (including ties)
     max_iou_per_gt_box = np.max(ious, axis=0)
-    anchors_with_max_iou = np.where(ious == max_iou_per_gt_box)[0]
+    anchors_with_max_iou, gt_boxes_for_max_anchors = np.where(ious == max_iou_per_gt_box)
+
+    # While anchor has max IoU for some GT box, it may overlap with other GT box better
+    anchors_with_max_iou = anchors_with_max_iou[max_iou_per_anchor[anchors_with_max_iou] == max_iou_per_gt_box[gt_boxes_for_max_anchors]]
 
     # Anchors what cross image boundary
     outside_image = np.where(~(
