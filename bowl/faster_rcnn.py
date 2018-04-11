@@ -21,6 +21,7 @@ from bowl.generators import bowl_validation_generator
 from bowl.mask_heads import MaskHead
 from bowl.rpns import RPN
 from bowl.roi_heads import RoIHead
+from bowl.model_checkpoint import ModelCheckpoint
 from bowl.utils import as_cuda
 from bowl.utils import iou
 from bowl.utils import construct_deltas
@@ -114,6 +115,7 @@ def fit(
     model = as_cuda(FasterRCNN(backbone, scales, ratios))
     optimizer = torch.optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr)
     reduce_lr = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=5)
+    model_checkpoint = ModelCheckpoint(model, 'faster-rcnn', logger=tqdm.write)
 
     if dataset == 'toy':
         train_generator = toy_shapes_generator(image_shape)
@@ -137,10 +139,12 @@ def fit(
         outputs = model.eval()(from_numpy(val_images))
         losses = compute_loss(*outputs[:-3], val_images.shape[2:], val_gt_boxes, val_gt_masks)
         print_losses(losses)
-        tqdm.write(str(box_mean_average_precision(outputs, val_gt_boxes)))
-        tqdm.write(str(mask_mean_average_precision(outputs, val_gt_masks)))
+        mask_map = mask_mean_average_precision(outputs, val_gt_masks)
+        bbox_map = box_mean_average_precision(outputs, val_gt_boxes)
+        tqdm.write(f'bbox map {bbox_map:.5f} - mask map {mask_map:.5f}')
         loss = sum(losses)
         #reduce_lr.step(loss.data[0])
+        model_checkpoint.step(mask_map)
         if visualize: display_boxes(outputs[-3], outputs[-2], to_numpy(outputs[-1]), np.moveaxis(val_images[0], 0, 2))
 
 def print_losses(losses):
