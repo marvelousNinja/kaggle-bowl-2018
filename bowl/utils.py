@@ -1,5 +1,6 @@
 from itertools import product
 
+import cv2
 import numpy as np
 import matplotlib
 matplotlib.use('TkAgg')
@@ -9,21 +10,26 @@ import torch
 from torch.autograd import Variable
 from nms.pth_nms import pth_nms
 
-def display_boxes(boxes, scores, bg):
+def display_boxes(boxes, masks, scores, bg):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
-    bg = (((bg * std) + mean) * 255).astype(np.uint)
+    bg = (((bg * std) + mean) * 255).astype(np.uint8)
     positives = np.where(scores > 0.7)[0]
     boxes = boxes[positives]
     boxes = boxes.astype(np.int32)
+    masks = masks[positives]
     boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, bg.shape[1] - 1)
     boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, bg.shape[0] - 1)
     plt.cla()
-    plt.imshow(bg)
     _, ax = plt.gcf(), plt.gca()
-    for (x1, y1, x2, y2) in boxes:
+    combined_mask = np.zeros(bg.shape)
+    for (x1, y1, x2, y2), mask in zip(boxes, masks):
         rect = patches.Rectangle((x1, y1), x2 - x1 + 1, y2 - y1 + 1,linewidth=1,edgecolor='r',facecolor='none')
         ax.add_patch(rect)
+        resized_mask = cv2.resize(mask, ((x2 - x1 + 1), (y2 - y1 + 1)), interpolation=cv2.INTER_CUBIC).round().astype(np.uint8) * 100
+        combined_mask[y1:y2 + 1,x1:x2 + 1] = resized_mask[:, :, None]
+    plt.imshow(bg)
+    plt.imshow(combined_mask, alpha=0.5)
     plt.pause(1e-7)
 
 def generate_anchors(stride, scales, ratios, image_shape):
