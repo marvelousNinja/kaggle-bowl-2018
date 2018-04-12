@@ -8,7 +8,7 @@ from torch.nn.functional import sigmoid
 
 from bowl.backbones import ResnetBackbone
 from bowl.backbones import VGGBackbone
-from bowl.faster_rcnn import FasterRCNN
+from bowl.mask_rcnn import MaskRCNN
 from bowl.generators import toy_shapes_generator
 from bowl.generators import bowl_train_generator
 from bowl.generators import bowl_validation_generator
@@ -27,7 +27,7 @@ def fit(
 
     np.random.seed(1991)
     backbone = ResnetBackbone(trainable_backbone)
-    model = as_cuda(FasterRCNN(backbone, scales, ratios))
+    model = as_cuda(MaskRCNN(backbone, scales, ratios))
     optimizer = torch.optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr)
 
     if dataset == 'toy':
