@@ -5,6 +5,8 @@ from functools import partial
 import cv2
 import numpy as np
 
+from bowl.utils import from_numpy
+
 def read_image(path):
     return cv2.cvtColor(cv2.imread(path), cv2.COLOR_BGR2RGB)
 
@@ -108,7 +110,7 @@ def pipeline(image_shape, image_id):
     if len(bboxes) == 0:
         # TODO AS: Oh so dumb...
         return pipeline(image_shape, image_id)
-    return image[None, :], bboxes[None, :], masks[None, :]
+    return from_numpy(image[None, :]), (bboxes[None, :], masks[None, :])
 
 if __name__ == '__main__':
     import pdb; pdb.set_trace()

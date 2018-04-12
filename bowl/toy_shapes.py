@@ -2,6 +2,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from bowl.utils import normalize
+from bowl.utils import from_numpy
 
 def random_bbox_in(shape):
     width = np.random.randint(16, int(shape[1] / 5))
@@ -73,7 +74,7 @@ def generate_segmentation_batch(size, shape=(224, 224)):
     gt_boxes = np.array(gt_boxes)
     masks = np.array(masks)
 
-    return images, gt_boxes, masks
+    return from_numpy(images), (gt_boxes, masks)
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
