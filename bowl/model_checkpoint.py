@@ -32,5 +32,6 @@ class ModelCheckpoint():
         if metrics > self.metrics:
             checkpoint_path = self.generate_checkpoint_path(self.epoch, metrics)
             save_checkpoint(self.model, checkpoint_path)
+            self.metrics = metrics
             if self.logger: self.logger(f'Checkpoint saved {checkpoint_path}')
         self.epoch += 1

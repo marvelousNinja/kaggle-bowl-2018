@@ -1,18 +1,21 @@
 from functools import partial
 
-from fire import Fire
 import numpy as np
 import torch
+from fire import Fire
+from tqdm import tqdm
 from torch.nn.functional import softmax
 from torch.nn.functional import sigmoid
 
 from bowl.backbones import ResnetBackbone
 from bowl.backbones import VGGBackbone
-from bowl.mask_rcnn import MaskRCNN
 from bowl.generators import toy_shapes_generator
 from bowl.generators import bowl_train_generator
 from bowl.generators import bowl_validation_generator
 from bowl.losses import compute_loss
+from bowl.mask_rcnn import MaskRCNN
+from bowl.metrics import mask_mean_average_precision
+from bowl.model_checkpoint import ModelCheckpoint
 from bowl.training import fit_model
 from bowl.utils import as_cuda
 from bowl.utils import display_boxes
@@ -29,6 +32,7 @@ def fit(
     backbone = ResnetBackbone(trainable_backbone)
     model = as_cuda(MaskRCNN(backbone, scales, ratios))
     optimizer = torch.optim.Adam(filter(lambda param: param.requires_grad, model.parameters()), lr)
+    model_checkpoint = ModelCheckpoint(model, 'mask-rcnn', logger=tqdm.write)
 
     if dataset == 'toy':
         train_generator = toy_shapes_generator(image_shape)
@@ -45,11 +49,27 @@ def fit(
         compute_loss,
         num_epochs,
         num_batches,
-        after_validation=display_predictions if visualize else None
+        after_validation=partial(after_validation, visualize, model_checkpoint)
     )
 
-def display_predictions(inputs, outputs, gt):
-    display_boxes(outputs[-4], outputs[-3], to_numpy(outputs[-2]), np.moveaxis(to_numpy(inputs[0]), 0, 2))
+def after_validation(visualize, model_checkpoint, inputs, outputs, gt):
+    if visualize:
+        display_boxes(
+            outputs.rcnn_detections,
+            outputs.rcnn_detection_masks,
+            to_numpy(outputs.rcnn_detection_scores),
+            np.moveaxis(to_numpy(inputs[0]), 0, 2)
+        )
+
+    mask_map = mask_mean_average_precision(
+        outputs.rcnn_detections,
+        outputs.rcnn_detection_masks,
+        to_numpy(outputs.rcnn_detection_scores.view(-1)),
+        gt[1]
+    )
+
+    model_checkpoint.step(mask_map)
+    tqdm.write(f'mask mAP {mask_map}')
 
 def prof():
     import profile

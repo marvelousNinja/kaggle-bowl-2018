@@ -1,4 +1,5 @@
 from functools import partial
+from collections import namedtuple
 
 import torch
 import numpy as np
@@ -14,6 +15,10 @@ from bowl.utils import to_numpy
 from bowl.utils import non_max_suppression
 from bowl.utils import generate_anchors
 from roi_align.crop_and_resize import CropAndResizeFunction
+
+MaskRCNNOutputs = namedtuple('MaskRCNNOutputs', [
+    'rpn_logits', 'rpn_deltas', 'rpn_proposals', 'anchors', 'rcnn_logits', 'rcnn_deltas', 'rcnn_masks', 'rcnn_detections', 'rcnn_detection_masks', 'rcnn_detection_scores', 'image_shape'
+])
 
 class MaskRCNN(torch.nn.Module):
     def __init__(self, backbone, scales, ratios):
@@ -78,4 +83,9 @@ class MaskRCNN(torch.nn.Module):
         rcnn_detection_scores = rcnn_detection_scores[keep_indicies]
         rcnn_detection_masks = to_numpy(sigmoid(rcnn_masks[keep_indicies][:, 0]))
 
-        return rpn_logits, rpn_deltas, rpn_proposals, anchors, rcnn_logits, rcnn_deltas, rcnn_masks, rcnn_detections, rcnn_detection_masks, rcnn_detection_scores, image_shape
+        return MaskRCNNOutputs(
+            rpn_logits, rpn_deltas, rpn_proposals,
+            anchors, rcnn_logits, rcnn_deltas, rcnn_masks,
+            rcnn_detections, rcnn_detection_masks, rcnn_detection_scores,
+            image_shape
+        )

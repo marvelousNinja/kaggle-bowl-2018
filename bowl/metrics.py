@@ -44,30 +44,27 @@ def box_mean_average_precision(outputs, gt_boxes):
     value = num_positives / (num_positives + num_negatives)
     return value
 
-def mask_mean_average_precision(outputs, gt_masks):
-    pred_masks = outputs[-2]
-    pred_boxes = outputs[-3]
-    scores = to_numpy(outputs[-1].view(-1))
-    pred_masks = pred_masks[scores > 0.7]
-    pred_boxes = pred_boxes[scores > 0.7].astype(np.int)
+def mask_mean_average_precision(detections, masks, scores, gt_masks):
+    masks = masks[scores > 0.7]
+    detections = detections[scores > 0.7].astype(np.int32)
     gt_masks = gt_masks[0]
 
-    if len(pred_masks) == 0:
+    if len(masks) == 0:
         return 0
 
-    expanded_masks = np.zeros((len(pred_masks), gt_masks.shape[1], gt_masks.shape[2]))
-    for i, (pred_mask, (x1, y1, x2, y2)) in enumerate(zip(pred_masks, pred_boxes)):
+    expanded_masks = np.zeros((len(masks), gt_masks.shape[1], gt_masks.shape[2]))
+    for i, (pred_mask, (x1, y1, x2, y2)) in enumerate(zip(masks, detections)):
         resized_mask = cv2.resize(pred_mask, (x2 - x1 + 1, y2 - y1 + 1), interpolation=cv2.INTER_CUBIC)
         expanded_masks[i, y1:y2 + 1, x1:x2 + 1] = resized_mask.round()
 
     gt_masks = mask_util.encode(np.asfortranarray(np.moveaxis(gt_masks, 0, 2).astype(np.uint8)))
-    pred_masks = mask_util.encode(np.asfortranarray(np.moveaxis(expanded_masks, 0, 2).astype(np.uint8)))
+    masks = mask_util.encode(np.asfortranarray(np.moveaxis(expanded_masks, 0, 2).astype(np.uint8)))
 
     num_positives = 0
     num_negatives = 0
 
     for threshold in np.arange(0.5, 1, 0.05):
-        ious = mask_util.iou(pred_masks, gt_masks, np.zeros(len(pred_masks)))
+        ious = mask_util.iou(masks, gt_masks, np.zeros(len(masks)))
 
         while True:
             if ious.shape[0] == 0:
