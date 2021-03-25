@@ -39,7 +39,7 @@ pyperclip==1.6.0
 python-dateutil==2.7.0
 python-utils==2.3.0
 pytz==2018.3
-PyYAML==3.12
+PyYAML==5.4
 requests==2.18.4
 scipy==1.0.0
 six==1.11.0
