@@ -47,6 +47,6 @@ stevedore==1.28.0
 torch==0.3.1
 torchvision==0.2.0
 tqdm==4.19.7
-urllib3==1.22
+urllib3==1.26.5
 Werkzeug==0.14.1
 wrapt==1.10.11
