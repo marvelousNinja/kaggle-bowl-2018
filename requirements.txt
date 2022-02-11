@@ -30,7 +30,7 @@ pbr==3.1.1
 Pillow==5.0.0
 prettytable==0.7.2
 progressbar2==3.34.3
-protobuf==3.5.2
+protobuf==3.15.0
 -e git+https://github.com/waleedka/coco.git@f83e9552d4ca57e15a16dca2efe3dcd80693358a#egg=pycocotools&subdirectory=PythonAPI
 pycparser==2.18
 pylint==1.8.2
